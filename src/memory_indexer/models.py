@@ -1,0 +1,62 @@
+"""数据模型定义。"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+import time
+
+Vector = List[float]
+VectorGroup = List[Vector]
+
+
+@dataclass
+class MemoryItem:
+    """记忆条目（内容层）。"""
+
+    mem_id: str
+    text: str
+    created_at: float = field(default_factory=lambda: time.time())
+    source: str = "unknown"
+    meta: Dict[str, str] = field(default_factory=dict)
+    summary: Optional[str] = None
+    keywords: List[str] = field(default_factory=list)
+
+
+@dataclass
+class EmbeddingRecord:
+    """向量记录（表示层）。"""
+
+    emb_id: str
+    mem_id: str
+    encoder_id: str
+    strategy: str
+    dims: int
+    n_vecs: int
+    vecs: VectorGroup
+    coarse_vec: Optional[Vector] = None
+    aux: Dict[str, List[str]] = field(default_factory=dict)
+
+
+@dataclass
+class Query:
+    """查询对象。"""
+
+    query_id: str
+    text: str
+    context: Optional[str] = None
+    encoder_id: str = ""
+    strategy: str = ""
+    q_vecs: Optional[VectorGroup] = None
+    coarse_vec: Optional[Vector] = None
+    aux: Dict[str, List[str]] = field(default_factory=dict)
+
+
+@dataclass
+class RetrieveResult:
+    """检索结果。"""
+
+    mem_id: str
+    score: float
+    coarse_score: float
+    debug: Dict[str, List[float]] = field(default_factory=dict)
