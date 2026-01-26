@@ -13,6 +13,7 @@ from .scorer import FieldScorer
 from .store import MemoryStore
 from .utils import normalize
 from .vectorizer import Vectorizer
+from .trace import trace, trace_progress
 
 
 def build_memory_index(
@@ -22,10 +23,13 @@ def build_memory_index(
 ) -> Tuple[MemoryStore, CoarseIndex]:
     """构建记忆库索引。"""
 
+    items = list(memory_items)
     store = MemoryStore()
     index = CoarseIndex()
 
-    for item in memory_items:
+    trace("开始构建记忆库索引")
+    progress = trace_progress("建库进度", total=len(items))
+    for idx, item in enumerate(items, start=1):
         token_vecs, tokens = encoder.encode_tokens(item.text)
         m_vecs, aux = vectorizer.make_group(token_vecs, tokens, item.text)
         m_vecs = [normalize(v) for v in m_vecs]
@@ -43,7 +47,10 @@ def build_memory_index(
         )
         store.add(item, emb)
         index.add(item.mem_id, coarse_vec)
+        progress.update(idx)
 
+    progress.finish()
+    trace("记忆库索引构建完成")
     return store, index
 
 
@@ -58,6 +65,7 @@ def retrieve_top_k(
 ) -> List[RetrieveResult]:
     """执行检索，并返回 top-k 结果。"""
 
+    trace("开始构建查询向量")
     token_vecs, tokens = encoder.encode_tokens(query_text)
     q_vecs, aux = vectorizer.make_group(token_vecs, tokens, query_text)
     q_vecs = [normalize(v) for v in q_vecs]
@@ -70,5 +78,25 @@ def retrieve_top_k(
         coarse_vec=normalize(encoder.encode_sentence(query_text)),
         aux=aux,
     )
+    trace("查询向量构建完成，进入检索")
     retriever = Retriever(store, index, FieldScorer())
-    return retriever.retrieve(q, top_n=top_n, top_k=top_k)
+    candidates = index.search(q.coarse_vec, top_n=top_n)
+    progress = trace_progress("精排进度", total=len(candidates))
+    results: List[RetrieveResult] = []
+    for idx, (mem_id, coarse_score) in enumerate(candidates, start=1):
+        emb = store.embs[mem_id]
+        score, debug = retriever.scorer.score(q.q_vecs, emb.vecs)
+        results.append(
+            RetrieveResult(
+                mem_id=mem_id,
+                score=score,
+                coarse_score=coarse_score,
+                debug=debug,
+            )
+        )
+        progress.update(idx)
+    progress.finish()
+    results.sort(key=lambda r: r.score, reverse=True)
+    final_results = results[:top_k]
+    trace(f"检索完成，输出 {len(final_results)} 条结果")
+    return final_results

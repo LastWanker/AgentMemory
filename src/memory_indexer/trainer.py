@@ -37,4 +37,5 @@ class SelfSupervisedTrainer:
 
     def train_projection_head(self, dataset: PairDataset) -> Tuple[int, int]:
         # 中文注释：返回 (epochs, samples) 作为训练报告
-        return self.config.epochs, len(dataset.pairs)
+        report = (self.config.epochs, len(dataset.pairs))
+        return report

@@ -9,6 +9,7 @@ from .scorer import FieldScorer
 from .store import MemoryStore
 from .retriever import Retriever
 from .pipeline import build_memory_index, retrieve_top_k
+from .trace import set_trace, trace
 
 __all__ = [
     "EmbeddingRecord",
@@ -24,4 +25,6 @@ __all__ = [
     "Retriever",
     "build_memory_index",
     "retrieve_top_k",
+    "set_trace",
+    "trace",
 ]

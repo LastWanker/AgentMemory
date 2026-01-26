@@ -6,10 +6,13 @@ from src.memory_indexer import (
     Vectorizer,
     build_memory_index,
     retrieve_top_k,
+    set_trace,
 )
 
 
 def main() -> None:
+    # 中文注释：演示默认开启输出，可用 set_trace(False) 或 MEMORY_INDEXER_TRACE=0 关闭
+    set_trace(True)
     # 中文注释：准备几条记忆
     items = [
         MemoryItem(mem_id="1", text="今天下雨了，我带了伞。"),

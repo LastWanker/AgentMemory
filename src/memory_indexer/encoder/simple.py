@@ -29,4 +29,5 @@ class SimpleHashEncoder(Encoder):
         if not token_vecs:
             # 中文注释：空文本兜底，返回全零向量
             return [0.0] * self.dims
-        return normalize(mean(token_vecs))
+        sentence_vec = normalize(mean(token_vecs))
+        return sentence_vec
