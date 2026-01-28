@@ -8,18 +8,21 @@ from __future__ import annotations
 from typing import List, Tuple
 
 from .base import Encoder
-from ..utils import Vector, mean, normalize, stable_hash, tokenize
+from ..utils import Vector, mean, normalize, stable_hash
+from ..tokenizers import Tokenizer, TokenizerInput, resolve_tokenizer
 
 
 class SimpleHashEncoder(Encoder):
     """简单哈希编码器，用于本地演示。"""
 
-    def __init__(self, dims: int = 8):
+    def __init__(self, dims: int = 8, tokenizer: TokenizerInput = None):
         super().__init__(encoder_id=f"simple-hash@{dims}")
         self.dims = dims
+        # 支持可替换分词器，避免中文按单字造成统计偏差。
+        self.tokenizer: Tokenizer = resolve_tokenizer(tokenizer)
 
     def encode_tokens(self, text: str) -> Tuple[List[Vector], List[str]]:
-        tokens = tokenize(text)
+        tokens = self.tokenizer.tokenize(text)
         # 把每个 token 都映射成一个固定维度向量
         vectors = [normalize(stable_hash(token, self.dims)) for token in tokens]
         return vectors, tokens

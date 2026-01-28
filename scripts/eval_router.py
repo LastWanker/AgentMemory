@@ -16,6 +16,7 @@ from src.memory_indexer import (
     Router,
     SimpleHashEncoder,
     Vectorizer,
+    build_memory_items,
     build_memory_index,
     retrieve_top_k,
     set_trace,
@@ -29,13 +30,20 @@ EVAL_PATH = DATA_DIR / "eval.jsonl"
 def load_memory_items(path: Path) -> List[MemoryItem]:
     """读取 memory.jsonl，转换为 MemoryItem 列表。"""
 
-    items: List[MemoryItem] = []
+    payloads: List[Dict[str, object]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
-        payload = json.loads(line)
-        items.append(MemoryItem(mem_id=payload["mem_id"], text=payload["text"]))
-    return items
+        payloads.append(json.loads(line))
+
+    # 记忆切块与来源标记：入口处统一补全元信息
+    return build_memory_items(
+        payloads,
+        source_default="manual",
+        chunk_strategy="sentence_window",
+        max_sentences=3,
+        tags_default=["general"],
+    )
 
 
 def load_eval_queries(path: Path) -> List[Tuple[str, List[str]]]:

@@ -1,11 +1,11 @@
 """小型演示：用最简编码器跑一次检索。"""
 
 from src.memory_indexer import (
-    MemoryItem,
     Router,
     SimpleHashEncoder,
     Vectorizer,
     build_memory_index,
+    build_memory_items,
     retrieve_top_k,
     set_trace,
 )
@@ -14,15 +14,17 @@ from src.memory_indexer import (
 def main() -> None:
     # 演示默认开启输出，可用 set_trace(False) 或 MEMORY_INDEXER_TRACE=0 关闭
     set_trace(True)
-    # 准备几条记忆
-    items = [
-        MemoryItem(mem_id="1", text="今天下雨了，我带了伞。"),
-        MemoryItem(mem_id="2", text="朋友说想喝咖啡，顺路带了拿铁。"),
-        MemoryItem(mem_id="3", text="晚上去跑步，发现公园灯光很亮。"),
-        MemoryItem(mem_id="4", text="特朗普和克林顿有一腿。"),
-        MemoryItem(mem_id="5", text="中国的纯牛奶行业全是垃圾。"),
+    # 准备几条记忆（入口统一做切块与来源标记）
+    payloads = [
+        {"mem_id": "1", "text": "今天下雨了，我带了伞。", "source": "chat", "tags": ["daily"]},
+        {"mem_id": "2", "text": "朋友说想喝咖啡，顺路带了拿铁。", "source": "chat", "tags": ["social"]},
+        {"mem_id": "3", "text": "晚上去跑步，发现公园灯光很亮。", "source": "log", "tags": ["health"]},
+        {"mem_id": "4", "text": "特朗普和克林顿有一腿。", "source": "manual", "tags": ["rumor"]},
+        {"mem_id": "5", "text": "中国的纯牛奶行业全是垃圾。", "source": "manual", "tags": ["opinion"]},
     ]
+    items = build_memory_items(payloads)
 
+    # 仍是 SimpleHashEncoder（非语义模型），可替换分词器后再做评估
     encoder = SimpleHashEncoder(dims=8)
     vectorizer = Vectorizer(strategy="token_pool_topk", k=8)
 

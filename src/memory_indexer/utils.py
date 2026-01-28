@@ -1,25 +1,12 @@
-"""工具函数：向量计算与简单分词。"""
+"""工具函数：向量计算。"""
 
 from __future__ import annotations
 
 from typing import Iterable, List
 import hashlib
 import math
-import re
 
 Vector = List[float]
-
-_TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]")
-
-
-def tokenize(text: str) -> List[str]:
-    """非常轻量的分词器：英文按词，中文按单字。
-
-    这里只是为了让示例能跑通，真实项目请替换为更靠谱的中文分词器。
-    """
-
-    return _TOKEN_RE.findall(text)
-
 
 def stable_hash(token: str, dims: int) -> Vector:
     """把 token 映射成固定维度向量（确定性）。
