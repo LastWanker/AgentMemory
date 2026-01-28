@@ -2,6 +2,7 @@
 
 from src.memory_indexer import (
     MemoryItem,
+    Router,
     SimpleHashEncoder,
     Vectorizer,
     build_memory_index,
@@ -27,13 +28,27 @@ def main() -> None:
 
     store, index = build_memory_index(items, encoder, vectorizer)
 
-    query = "我喝咖啡喜欢配牛奶。"
-    results = retrieve_top_k(query, encoder, vectorizer, store, index, top_n=5, top_k=5)
+    query = "你喜欢美酒加咖啡吗？"
+    router = Router(policy="soft", top_k=3)
+    results = retrieve_top_k(
+        query,
+        encoder,
+        vectorizer,
+        store,
+        index,
+        top_n=5,
+        top_k=5,
+        router=router,
+    )
 
     print("查询:", query)
     for result in results:
         item = store.items[result.mem_id]
         print("- 命中:", item.text, "score=", f"{result.score:.3f}")
+    if results and results[0].route_output:
+        route_output = results[0].route_output
+        print("路由策略:", route_output.policy)
+        print("路由指标:", route_output.metrics)
 
 
 if __name__ == "__main__":
