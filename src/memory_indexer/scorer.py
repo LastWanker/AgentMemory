@@ -19,7 +19,7 @@ class FieldScorer:
 
         best_per_q = []
         for q in q_vecs:
-            # 中文注释：选出与当前 q 最相似的 m
+            # 选出与当前 q 最相似的 m
             best = max(dot(q, m) for m in m_vecs)
             best_per_q.append(best)
 

@@ -19,13 +19,13 @@ TRACE_CONFIG = TraceConfig(enabled=os.getenv("MEMORY_INDEXER_TRACE", "0") == "1"
 
 
 def set_trace(enabled: bool) -> None:
-    """中文注释：手动开启或关闭运行输出。"""
+    """手动开启或关闭运行输出。"""
 
     TRACE_CONFIG.enabled = enabled
 
 
 def trace(message: str) -> None:
-    """中文注释：统一的输出入口，避免到处散落 print。"""
+    """统一的输出入口，避免到处散落 print。"""
 
     if TRACE_CONFIG.enabled:
         print(f"[运行] {message}")
@@ -73,6 +73,6 @@ class TraceProgress:
 
 
 def trace_progress(title: str, total: int) -> TraceProgress:
-    """中文注释：创建一个简洁进度条。"""
+    """创建一个简洁进度条。"""
 
     return TraceProgress(title=title, total=total)

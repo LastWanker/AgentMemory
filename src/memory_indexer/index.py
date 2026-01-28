@@ -19,7 +19,7 @@ class CoarseIndex:
         self.coarse_vecs.append(coarse_vec)
 
     def search(self, q_coarse: Vector, top_n: int = 1000) -> List[Tuple[str, float]]:
-        # 中文注释：向量已归一化，点积就是余弦相似度
+        # 向量已归一化，点积就是余弦相似度
         scores = [dot(vec, q_coarse) for vec in self.coarse_vecs]
         ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
         top = ranked[: min(top_n, len(ranked))]

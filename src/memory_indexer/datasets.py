@@ -16,7 +16,7 @@ class PairDataset:
 def build_pairs(dialogue_turns: Iterable[str]) -> PairDataset:
     """把连续对话切成 (x, y) 对。
 
-    中文注释：这里只做相邻句，真实场景可用更复杂的窗口。
+    这里只做相邻句，真实场景可用更复杂的窗口。
     """
 
     turns = list(dialogue_turns)

@@ -20,14 +20,14 @@ class SimpleHashEncoder(Encoder):
 
     def encode_tokens(self, text: str) -> Tuple[List[Vector], List[str]]:
         tokens = tokenize(text)
-        # 中文注释：把每个 token 都映射成一个固定维度向量
+        # 把每个 token 都映射成一个固定维度向量
         vectors = [normalize(stable_hash(token, self.dims)) for token in tokens]
         return vectors, tokens
 
     def encode_sentence(self, text: str) -> Vector:
         token_vecs, _ = self.encode_tokens(text)
         if not token_vecs:
-            # 中文注释：空文本兜底，返回全零向量
+            # 空文本兜底，返回全零向量
             return [0.0] * self.dims
         sentence_vec = normalize(mean(token_vecs))
         return sentence_vec

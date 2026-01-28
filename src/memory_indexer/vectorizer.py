@@ -28,7 +28,7 @@ class Vectorizer:
     def _token_pool_topk(
         self, token_vecs: List[Vector], tokens: List[str], k: int
     ) -> Tuple[List[Vector], Dict[str, List[str]]]:
-        # 中文注释：简单基于词频和长度打分，模拟 TF-IDF 选择
+        # 简单基于词频和长度打分，模拟 TF-IDF 选择
         freq = Counter(tokens)
         scored = []
         for idx, token in enumerate(tokens):
@@ -44,7 +44,7 @@ class Vectorizer:
     def _cluster_centers(
         self, token_vecs: List[Vector], tokens: List[str], r: int
     ) -> Tuple[List[Vector], Dict[str, List[str]]]:
-        # 中文注释：占位式“聚类”，实际按均匀间隔抽样
+        # 占位式“聚类”，实际按均匀间隔抽样
         if not token_vecs:
             return [], {"center_tokens": []}
         step = max(1, len(token_vecs) // r)

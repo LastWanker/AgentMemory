@@ -19,7 +19,7 @@ class TrainingConfig:
 class ProjectionHead:
     """小投影头的占位实现。
 
-    中文注释：真实版本可替换为 PyTorch/TF 模块。
+    真实版本可替换为 PyTorch/TF 模块。
     """
 
     def __call__(self, vectors: List[List[float]]) -> List[List[float]]:
@@ -36,6 +36,6 @@ class SelfSupervisedTrainer:
         self.config = config
 
     def train_projection_head(self, dataset: PairDataset) -> Tuple[int, int]:
-        # 中文注释：返回 (epochs, samples) 作为训练报告
+        # 返回 (epochs, samples) 作为训练报告
         report = (self.config.epochs, len(dataset.pairs))
         return report
