@@ -8,7 +8,7 @@ import uuid
 from .encoder.base import Encoder
 from .models import EmbeddingRecord, MemoryItem, Query, RetrieveResult
 from .index import CoarseIndex
-from .retriever import Retriever
+from .retriever import Retriever, Router
 from .scorer import FieldScorer
 from .store import MemoryStore
 from .utils import normalize
@@ -62,6 +62,7 @@ def retrieve_top_k(
     index: CoarseIndex,
     top_n: int = 1000,
     top_k: int = 10,
+    router: Router | None = None,
 ) -> List[RetrieveResult]:
     """执行检索，并返回 top-k 结果。"""
 
@@ -79,7 +80,8 @@ def retrieve_top_k(
         aux=aux,
     )
     trace("查询向量构建完成，进入检索")
-    retriever = Retriever(store, index, FieldScorer())
+    # 【新增】router 可在后续阶段切换软/半硬/硬策略，保持接口不变。
+    retriever = Retriever(store, index, FieldScorer(), router=router)
     candidates = index.search(q.coarse_vec, top_n=top_n)
     progress = trace_progress("精排进度", total=len(candidates))
     results: List[RetrieveResult] = []
