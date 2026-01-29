@@ -85,6 +85,7 @@ def evaluate_policy(
     vectorizer: Vectorizer,
     store,
     index,
+    lexical_index,
     top_n: int,
     top_k: int,
 ) -> Dict[str, float]:
@@ -109,6 +110,7 @@ def evaluate_policy(
             vectorizer,
             store,
             index,
+            lexical_index=lexical_index,
             top_n=top_n,
             top_k=top_k,
             router=router,
@@ -121,6 +123,7 @@ def evaluate_policy(
             vectorizer,
             store,
             index,
+            lexical_index=lexical_index,
             top_n=top_n,
             top_k=top_k,
             router=router,
@@ -155,7 +158,7 @@ def main() -> None:
 
     encoder = SimpleHashEncoder(dims=16)
     vectorizer = Vectorizer(strategy="token_pool_topk", k=8)
-    store, index = build_memory_index(items, encoder, vectorizer)
+    store, index, lexical_index = build_memory_index(items, encoder, vectorizer, return_lexical=True)
 
     top_n = 10
     top_k = 5
@@ -171,6 +174,7 @@ def main() -> None:
             vectorizer,
             store,
             index,
+            lexical_index,
             top_n,
             top_k,
         )

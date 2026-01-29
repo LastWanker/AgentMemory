@@ -97,9 +97,19 @@ class Router:
         if not scored:
             return {"semantic": 0.6, "lexical": 0.2, "meta": 0.15, "coarse": 0.05}
 
+        def normalize_values(values: List[float]) -> List[float]:
+            if not values:
+                return []
+            min_value = min(values)
+            max_value = max(values)
+            if max_value - min_value <= 1e-12:
+                return [1.0 for _ in values]
+            return [(value - min_value) / (max_value - min_value) for value in values]
+
         def avg_feature(key: str) -> float:
-            values = [max(0.0, features.get(key, 0.0)) for _, features in scored]
-            return sum(values) / len(values) if values else 0.0
+            raw_values = [max(0.0, features.get(key, 0.0)) for _, features in scored]
+            normalized = normalize_values(raw_values)
+            return sum(normalized) / len(normalized) if normalized else 0.0
 
         strengths = {
             "semantic": avg_feature("semantic_score"),
@@ -278,10 +288,14 @@ class Retriever:
                 continue
             weight = route_output.weights.get(mem_id, 1.0)
             combined_score = route_output.scores.get(mem_id, score)
+            if self.router.policy == "soft":
+                final_score = combined_score
+            else:
+                final_score = combined_score * weight
             results.append(
                 RetrieveResult(
                     mem_id=mem_id,
-                    score=combined_score * weight,
+                    score=final_score,
                     coarse_score=coarse_score,
                     debug=debug,
                     features=features,
