@@ -4,7 +4,7 @@ from .models import EmbeddingRecord, MemoryItem, Query, RetrieveResult, RouteOut
 from .encoder.base import Encoder
 from .encoder.simple import SimpleHashEncoder
 from .vectorizer import Vectorizer
-from .index import CoarseIndex
+from .index import CoarseIndex, LexicalIndex
 from .scorer import FieldScorer
 from .store import MemoryStore
 from .retriever import Retriever, Router
@@ -23,6 +23,7 @@ __all__ = [
     "SimpleHashEncoder",
     "Vectorizer",
     "CoarseIndex",
+    "LexicalIndex",
     "FieldScorer",
     "MemoryStore",
     "Retriever",

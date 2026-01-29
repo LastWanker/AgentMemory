@@ -60,6 +60,7 @@ class RetrieveResult:
     score: float
     coarse_score: float
     debug: Dict[str, List[float]] = field(default_factory=dict)
+    features: Dict[str, float] = field(default_factory=dict)
     route_output: Optional["RouteOutput"] = None
     # 【新增】route_output 用于承接软/半硬/硬路由的可解释输出与评估指标。
 
@@ -73,4 +74,5 @@ class RouteOutput:
     selected_ids: List[str] = field(default_factory=list)
     metrics: Dict[str, float] = field(default_factory=dict)
     explain: Dict[str, List[str]] = field(default_factory=dict)
+    scores: Dict[str, float] = field(default_factory=dict)
     # 【新增】policy=soft/half_hard/hard；weights/selected_ids/metrics/explain 兼容阶段化路由。 

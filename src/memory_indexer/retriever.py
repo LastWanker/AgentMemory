@@ -1,11 +1,12 @@
-"""检索器：粗召回 + 精排。"""
+"""检索器：粗召回 + 精排 + 多证据路由。"""
 
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 import math
+import time
 
-from .index import CoarseIndex
+from .index import CoarseIndex, LexicalIndex
 from .models import Query, RetrieveResult, RouteOutput
 from .scorer import FieldScorer
 from .store import MemoryStore
@@ -22,9 +23,10 @@ class Router:
         self._last_signature: Optional[str] = None
         self._last_top_ids: List[str] = []
 
-    def route(self, scored: List[Tuple[str, float]]) -> RouteOutput:
+    def route(self, scored: List[Tuple[str, Dict[str, float]]]) -> RouteOutput:
         """根据策略生成路由输出。"""
-        ranked = sorted(scored, key=lambda x: x[1], reverse=True)
+        combined_scores, channel_weights = self._combine_scores(scored)
+        ranked = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)
         weights: Dict[str, float] = {}
         selected: List[str] = []
 
@@ -48,13 +50,68 @@ class Router:
             raise ValueError(f"未知路由策略: {self.policy}")
 
         metrics, explain = self._build_metrics_and_explain(ranked, weights)
+        explain["channel_weights"] = [
+            f"{key}={value:.3f}" for key, value in channel_weights.items()
+        ]
+        explain["feature_keys"] = [
+            "semantic_score",
+            "coarse_score",
+            "lexical_score",
+            "token_overlap",
+            "source_score",
+            "tag_match",
+            "recency_score",
+            "meta_score",
+        ]
         return RouteOutput(
             policy=self.policy,
             weights=weights,
             selected_ids=selected,
             metrics=metrics,
             explain=explain,
+            scores=combined_scores,
         )
+
+    def _combine_scores(
+        self, scored: List[Tuple[str, Dict[str, float]]]
+    ) -> Tuple[Dict[str, float], Dict[str, float]]:
+        """根据多证据特征融合总分，并返回通道权重。"""
+
+        channel_weights = self._compute_channel_weights(scored)
+        combined: Dict[str, float] = {}
+        for mem_id, features in scored:
+            combined_score = (
+                channel_weights["semantic"] * features.get("semantic_score", 0.0)
+                + channel_weights["lexical"] * features.get("lexical_score", 0.0)
+                + channel_weights["meta"] * features.get("meta_score", 0.0)
+                + channel_weights["coarse"] * features.get("coarse_score", 0.0)
+            )
+            combined[mem_id] = float(combined_score)
+        return combined, channel_weights
+
+    def _compute_channel_weights(
+        self, scored: List[Tuple[str, Dict[str, float]]]
+    ) -> Dict[str, float]:
+        """按 query 级别估计证据强度，得到 α/β/γ/δ。"""
+
+        if not scored:
+            return {"semantic": 0.6, "lexical": 0.2, "meta": 0.15, "coarse": 0.05}
+
+        def avg_feature(key: str) -> float:
+            values = [max(0.0, features.get(key, 0.0)) for _, features in scored]
+            return sum(values) / len(values) if values else 0.0
+
+        strengths = {
+            "semantic": avg_feature("semantic_score"),
+            "lexical": avg_feature("lexical_score"),
+            "meta": avg_feature("meta_score"),
+            "coarse": avg_feature("coarse_score"),
+        }
+        total = sum(strengths.values())
+        if total <= 1e-12:
+            return {"semantic": 0.6, "lexical": 0.2, "meta": 0.15, "coarse": 0.05}
+
+        return {key: value / total for key, value in strengths.items()}
 
     def _softmax_weights(self, ranked: List[Tuple[str, float]]) -> Dict[str, float]:
         scores = [score for _, score in ranked]
@@ -173,38 +230,109 @@ class Retriever:
         index: CoarseIndex,
         scorer: FieldScorer,
         router: Optional[Router] = None,
+        lexical_index: Optional[LexicalIndex] = None,
+        recency_half_life_days: float = 7.0,
     ) -> None:
         self.store = store
         self.index = index
         self.scorer = scorer
         self.router = router or Router()
+        self.lexical_index = lexical_index
+        self.recency_half_life_days = recency_half_life_days
 
     def retrieve(self, q: Query, top_n: int = 1000, top_k: int = 10) -> List[RetrieveResult]:
         if q.coarse_vec is None or q.q_vecs is None:
             raise ValueError("查询向量尚未构建")
 
         candidates = self.index.search(q.coarse_vec, top_n=top_n)
-        scored: List[Tuple[str, float, float, Dict[str, List[float]]]] = []
+        query_tokens = q.aux.get("tokens", []) if q.aux else []
+        lexical_scores = self._build_lexical_scores(query_tokens, top_n=top_n)
+        scored: List[Tuple[str, Dict[str, float], float, float, Dict[str, List[float]]]] = []
         for mem_id, coarse_score in candidates:
             emb = self.store.embs[mem_id]
             score, debug = self.scorer.score(q.q_vecs, emb.vecs)
-            scored.append((mem_id, score, coarse_score, debug))
+            item = self.store.items[mem_id]
+            doc_tokens = self.store.tokens.get(mem_id, [])
+            token_overlap = self._token_overlap(query_tokens, doc_tokens)
+            lexical_score = lexical_scores.get(mem_id, token_overlap)
+            source_score = self._source_score(item.source)
+            tag_match = self._tag_match_score(query_tokens, item.keywords)
+            recency_score = self._recency_score(item.created_at)
+            meta_score = (source_score + tag_match + recency_score) / 3.0
+            features = {
+                "semantic_score": float(score),
+                "coarse_score": float(coarse_score),
+                "lexical_score": float(lexical_score),
+                "token_overlap": float(token_overlap),
+                "source_score": float(source_score),
+                "tag_match": float(tag_match),
+                "recency_score": float(recency_score),
+                "meta_score": float(meta_score),
+            }
+            scored.append((mem_id, features, score, coarse_score, debug))
 
-        route_output = self.router.route([(mem_id, score) for mem_id, score, _, _ in scored])
+        route_output = self.router.route([(mem_id, features) for mem_id, features, _, _, _ in scored])
         results: List[RetrieveResult] = []
-        for mem_id, score, coarse_score, debug in scored:
+        for mem_id, features, score, coarse_score, debug in scored:
             if self.router.policy == "hard" and mem_id not in route_output.selected_ids:
                 continue
             weight = route_output.weights.get(mem_id, 1.0)
+            combined_score = route_output.scores.get(mem_id, score)
             results.append(
                 RetrieveResult(
                     mem_id=mem_id,
-                    score=score * weight,
+                    score=combined_score * weight,
                     coarse_score=coarse_score,
                     debug=debug,
+                    features=features,
                     route_output=route_output,
                 )
             )
 
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:top_k]
+
+    def _build_lexical_scores(self, query_tokens: List[str], top_n: int) -> Dict[str, float]:
+        if not self.lexical_index:
+            return {}
+        return {
+            mem_id: score
+            for mem_id, score in self.lexical_index.search(query_tokens, top_n=top_n)
+        }
+
+    def _token_overlap(self, query_tokens: List[str], doc_tokens: List[str]) -> float:
+        """简单 overlap 比例，用于“词法证据”。"""
+
+        if not query_tokens or not doc_tokens:
+            return 0.0
+        query_set = set(query_tokens)
+        doc_set = set(doc_tokens)
+        return len(query_set & doc_set) / (len(query_set) or 1)
+
+    def _source_score(self, source: str) -> float:
+        """对来源做轻量可信度评分。"""
+
+        source_key = source.lower()
+        if source_key in {"user", "manual"}:
+            return 1.0
+        if source_key in {"system", "pipeline"}:
+            return 0.7
+        return 0.5
+
+    def _tag_match_score(self, query_tokens: List[str], keywords: List[str]) -> float:
+        """关键词匹配：query token 命中 tags 的比例。"""
+
+        if not query_tokens or not keywords:
+            return 0.0
+        query_set = set(query_tokens)
+        keyword_set = set(keywords)
+        return len(query_set & keyword_set) / (len(keyword_set) or 1)
+
+    def _recency_score(self, created_at: float) -> float:
+        """时间衰减，越新越接近 1.0。"""
+
+        if created_at <= 0:
+            return 0.0
+        half_life_seconds = self.recency_half_life_days * 24 * 3600
+        delta = max(0.0, time.time() - created_at)
+        return float(pow(0.5, delta / (half_life_seconds or 1.0)))
