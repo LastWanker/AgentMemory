@@ -133,8 +133,18 @@ class Router:
     def _signature_for_ranked(self, ranked: List[Tuple[str, float]]) -> str:
         """构建候选签名，用于同一 query 重复运行的一致性判断。"""
 
-        # 只使用 mem_id 顺序，避免浮点分数带来的抖动。
-        return "|".join(mem_id for mem_id, _ in ranked)
+        # 采用分桶后的签名：对分数做轻微量化，减少接近分数的排序抖动。
+        # 同桶内只保留 mem_id 集合（排序后拼接），避免因顺序交换导致签名变化。
+        buckets: Dict[float, List[str]] = {}
+        for mem_id, score in ranked:
+            bucket_key = round(score, 3)
+            buckets.setdefault(bucket_key, []).append(mem_id)
+
+        signature_parts: List[str] = []
+        for bucket_key in sorted(buckets.keys(), reverse=True):
+            mem_ids = ",".join(sorted(buckets[bucket_key]))
+            signature_parts.append(f"{bucket_key:.3f}:{mem_ids}")
+        return "|".join(signature_parts)
 
     def _counterfactual_drop(self, ordered_scores: List[float], k: int) -> Tuple[float, float]:
         """计算反事实敏感性：移除最高分后 top-1 / top-k 分数下降幅度。"""
