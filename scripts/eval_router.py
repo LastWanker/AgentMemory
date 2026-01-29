@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from src.memory_indexer import (
     MemoryItem,
@@ -88,12 +88,14 @@ def evaluate_policy(
     lexical_index,
     top_n: int,
     top_k: int,
+    fixed_channel_weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
     """评估单个路由策略，返回平均指标。"""
 
-    router = Router(policy=policy, top_k=top_k)
+    router = Router(policy=policy, top_k=top_k, fixed_channel_weights=fixed_channel_weights)
     total_recall = 0.0
     total_mrr = 0.0
+    total_top1 = 0.0
     metric_sums = {
         "entropy": 0.0,
         "mass_at_k": 0.0,
@@ -131,6 +133,7 @@ def evaluate_policy(
         hit_ids = [result.mem_id for result in results]
         total_recall += recall_at_k(hit_ids, expected_mem_ids)
         total_mrr += mrr(hit_ids, expected_mem_ids)
+        total_top1 += 1.0 if hit_ids and hit_ids[0] in set(expected_mem_ids) else 0.0
 
         route_output = results[0].route_output if results else None
         if route_output:
@@ -141,6 +144,7 @@ def evaluate_policy(
     averages = {
         "recall_at_k": total_recall / count,
         "mrr": total_mrr / count,
+        "top1_acc": total_top1 / count,
     }
     averages.update({key: value / count for key, value in metric_sums.items()})
     return averages
@@ -164,29 +168,48 @@ def main() -> None:
     top_k = 5
 
     print("\n=== 小评测集 ===")
-    print(f"样本数: {len(queries)} | top_n={top_n} | top_k={top_k}\n")
+    print(f"样本数: {len(queries)} | top_n={top_n} | top_k={top_k}")
+    print("阶段 1/3: 构建索引与编码器完成，开始跑 ablation。")
 
-    for policy in ("soft", "half_hard", "hard"):
-        metrics = evaluate_policy(
-            policy,
-            queries,
-            encoder,
-            vectorizer,
-            store,
-            index,
-            lexical_index,
-            top_n,
-            top_k,
-        )
-        print(f"[policy={policy}]")
-        print(
-            "  Recall@k={recall_at_k:.3f} | MRR={mrr:.3f} | "
-            "entropy={entropy:.3f} | mass@k={mass_at_k:.3f} | "
-            "consistency={consistency:.3f} | "
-            "cf_drop_top1={counterfactual_drop_top1:.3f} | "
-            "cf_drop_topk={counterfactual_drop_topk:.3f}".format(**metrics)
-        )
-        print("-")
+    # ablation 组：固定通道权重来观察证据价值与变硬风险。
+    ablation_groups = [
+        ("baseline(auto)", None),
+        ("S-only", {"semantic": 1.0, "lexical": 0.0, "meta": 0.0, "coarse": 0.0}),
+        ("S+L", {"semantic": 0.7, "lexical": 0.3, "meta": 0.0, "coarse": 0.0}),
+        ("S+M", {"semantic": 0.7, "lexical": 0.0, "meta": 0.3, "coarse": 0.0}),
+        ("S+L+M", {"semantic": 0.6, "lexical": 0.25, "meta": 0.15, "coarse": 0.0}),
+        ("L-only", {"semantic": 0.0, "lexical": 1.0, "meta": 0.0, "coarse": 0.0}),
+    ]
+
+    for group_name, fixed_weights in ablation_groups:
+        print("\n" + "=" * 72)
+        print(f"阶段 2/3: ablation={group_name} | fixed_weights={fixed_weights}")
+        print("=" * 72)
+        for policy in ("soft", "half_hard", "hard"):
+            print(f"  -> 开始评估 policy={policy}")
+            metrics = evaluate_policy(
+                policy,
+                queries,
+                encoder,
+                vectorizer,
+                store,
+                index,
+                lexical_index,
+                top_n,
+                top_k,
+                fixed_channel_weights=fixed_weights,
+            )
+            print(f"  [policy={policy}]")
+            print(
+                "    Recall@k={recall_at_k:.3f} | MRR={mrr:.3f} | Top1={top1_acc:.3f}\n"
+                "    entropy={entropy:.3f} | mass@k={mass_at_k:.3f} | "
+                "consistency={consistency:.3f} | "
+                "cf_drop_top1={counterfactual_drop_top1:.3f} | "
+                "cf_drop_topk={counterfactual_drop_topk:.3f}".format(**metrics)
+            )
+        print("  完成该组 ablation。")
+
+    print("\n阶段 3/3: 全部 ablation 结束，可对比证据价值与变硬风险。\n")
 
 
 if __name__ == "__main__":

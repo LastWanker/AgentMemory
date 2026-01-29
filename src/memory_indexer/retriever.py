@@ -15,10 +15,17 @@ from .store import MemoryStore
 class Router:
     """候选路由器（软/半硬/硬阶段）。"""
 
-    def __init__(self, policy: str = "soft", top_k: int = 10, weak_weight: float = 0.05) -> None:
+    def __init__(
+        self,
+        policy: str = "soft",
+        top_k: int = 10,
+        weak_weight: float = 0.05,
+        fixed_channel_weights: Optional[Dict[str, float]] = None,
+    ) -> None:
         self.policy = policy
         self.top_k = top_k
         self.weak_weight = weak_weight
+        self.fixed_channel_weights = fixed_channel_weights
         # 用于“同一 query 重复跑”的一致性监测：记录上一次的候选签名与 top-k。
         self._last_signature: Optional[str] = None
         self._last_top_ids: List[str] = []
@@ -94,6 +101,9 @@ class Router:
     ) -> Dict[str, float]:
         """按 query 级别估计证据强度，得到 α/β/γ/δ。"""
 
+        if self.fixed_channel_weights is not None:
+            return self._normalize_channel_weights(self.fixed_channel_weights)
+
         if not scored:
             return {"semantic": 0.6, "lexical": 0.2, "meta": 0.15, "coarse": 0.05}
 
@@ -122,6 +132,16 @@ class Router:
             return {"semantic": 0.6, "lexical": 0.2, "meta": 0.15, "coarse": 0.05}
 
         return {key: value / total for key, value in strengths.items()}
+
+    def _normalize_channel_weights(self, raw_weights: Dict[str, float]) -> Dict[str, float]:
+        """归一化通道权重，缺失键视为 0。"""
+
+        keys = ("semantic", "lexical", "meta", "coarse")
+        weights = {key: float(raw_weights.get(key, 0.0)) for key in keys}
+        total = sum(max(0.0, value) for value in weights.values())
+        if total <= 1e-12:
+            return {"semantic": 0.6, "lexical": 0.2, "meta": 0.15, "coarse": 0.05}
+        return {key: max(0.0, value) / total for key, value in weights.items()}
 
     def _softmax_weights(self, ranked: List[Tuple[str, float]]) -> Dict[str, float]:
         scores = [score for _, score in ranked]
