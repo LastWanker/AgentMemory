@@ -2,5 +2,6 @@
 
 from .base import Encoder
 from .simple import SimpleHashEncoder
+from .hf_sentence import HFSentenceEncoder
 
-__all__ = ["Encoder", "SimpleHashEncoder"]
+__all__ = ["Encoder", "SimpleHashEncoder", "HFSentenceEncoder"]

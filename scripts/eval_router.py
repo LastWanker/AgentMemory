@@ -12,15 +12,16 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from src.memory_indexer import (
+    Encoder,
     MemoryItem,
     Router,
-    SimpleHashEncoder,
     Vectorizer,
     build_memory_items,
     build_memory_index,
     retrieve_top_k,
     set_trace,
 )
+from src.memory_indexer.encoder.hf_sentence import HFSentenceEncoder
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 MEMORY_PATH = DATA_DIR / "memory.jsonl"
@@ -81,7 +82,7 @@ def mrr(hit_ids: List[str], expected_ids: Iterable[str]) -> float:
 def evaluate_policy(
     policy: str,
     queries: List[Tuple[str, List[str]]],
-    encoder: SimpleHashEncoder,
+    encoder: Encoder,
     vectorizer: Vectorizer,
     store,
     index,
@@ -160,7 +161,7 @@ def main() -> None:
     items = load_memory_items(MEMORY_PATH)
     queries = load_eval_queries(EVAL_PATH)
 
-    encoder = SimpleHashEncoder(dims=16)
+    encoder = HFSentenceEncoder(model_name="intfloat/multilingual-e5-small", tokenizer="jieba")
     vectorizer = Vectorizer(strategy="token_pool_topk", k=8)
     store, index, lexical_index = build_memory_index(items, encoder, vectorizer, return_lexical=True)
 
