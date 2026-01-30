@@ -9,23 +9,28 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
+import uuid
 
 from src.memory_indexer import (
     Encoder,
     MemoryItem,
+    Query,
     Router,
+    Retriever,
+    FieldScorer,
     Vectorizer,
     build_memory_items,
     build_memory_index,
-    retrieve_top_k,
     set_trace,
 )
 from src.memory_indexer.encoder.hf_sentence import HFSentenceEncoder
+from src.memory_indexer.utils import normalize
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 MEMORY_PATH = DATA_DIR / "memory.jsonl"
 EVAL_PATH = DATA_DIR / "eval.jsonl"
+EVAL_CACHE_PATH = DATA_DIR / "eval_cache.jsonl"
 
 
 def load_memory_items(path: Path) -> List[MemoryItem]:
@@ -79,11 +84,91 @@ def mrr(hit_ids: List[str], expected_ids: Iterable[str]) -> float:
     return 0.0
 
 
-def evaluate_policy(
-    policy: str,
+def build_cached_queries(
     queries: List[Tuple[str, List[str]]],
     encoder: Encoder,
     vectorizer: Vectorizer,
+) -> Iterator[Dict[str, object]]:
+    """预编码查询，避免在评测循环里重复编码。"""
+
+    texts = [query_text for query_text, _ in queries]
+
+    if isinstance(encoder, HFSentenceEncoder):
+        placeholder_vecs = encoder.encode_query_placeholder_batch(texts)
+        coarse_vecs = encoder.encode_sentence_batch(texts)
+        for (query_text, expected_ids), placeholder_vec, coarse_vec in zip(
+            queries, placeholder_vecs, coarse_vecs
+        ):
+            tokens = encoder.tokenizer.tokenize(query_text)
+            token_vecs = [placeholder_vec for _ in tokens]
+            q_vecs, aux = vectorizer.make_group(token_vecs, tokens, query_text)
+            q_vecs = [normalize(v) for v in q_vecs]
+            yield {
+                "query_id": str(uuid.uuid4()),
+                "query_text": query_text,
+                "expected_mem_ids": expected_ids,
+                "encoder_id": encoder.encoder_id,
+                "strategy": vectorizer.strategy,
+                "q_vecs": q_vecs,
+                "coarse_vec": normalize(coarse_vec),
+                "aux": {**aux, "tokens": tokens},
+            }
+        return
+
+    for query_text, expected_ids in queries:
+        token_vecs, tokens = encoder.encode_tokens(query_text)
+        q_vecs, aux = vectorizer.make_group(token_vecs, tokens, query_text)
+        q_vecs = [normalize(v) for v in q_vecs]
+        yield {
+            "query_id": str(uuid.uuid4()),
+            "query_text": query_text,
+            "expected_mem_ids": expected_ids,
+            "encoder_id": encoder.encoder_id,
+            "strategy": vectorizer.strategy,
+            "q_vecs": q_vecs,
+            "coarse_vec": normalize(encoder.encode_sentence(query_text)),
+            "aux": {**aux, "tokens": tokens},
+        }
+
+
+def write_cached_queries(
+    path: Path,
+    queries: List[Tuple[str, List[str]]],
+    encoder: Encoder,
+    vectorizer: Vectorizer,
+) -> None:
+    """将预编码的 query 写入磁盘缓存文件。"""
+
+    with path.open("w", encoding="utf-8") as handle:
+        for payload in build_cached_queries(queries, encoder, vectorizer):
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def iter_cached_queries(path: Path) -> Iterator[Tuple[Query, List[str]]]:
+    """从磁盘缓存中读取 query，避免占用大量内存。"""
+
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            yield (
+                Query(
+                    query_id=payload["query_id"],
+                    text=payload["query_text"],
+                    encoder_id=payload["encoder_id"],
+                    strategy=payload["strategy"],
+                    q_vecs=payload["q_vecs"],
+                    coarse_vec=payload["coarse_vec"],
+                    aux=payload.get("aux", {}),
+                ),
+                payload["expected_mem_ids"],
+            )
+
+
+def evaluate_policy(
+    policy: str,
+    cached_queries: Iterator[Tuple[Query, List[str]]],
     store,
     index,
     lexical_index,
@@ -97,6 +182,7 @@ def evaluate_policy(
     total_recall = 0.0
     total_mrr = 0.0
     total_top1 = 0.0
+    count = 0
     metric_sums = {
         "entropy": 0.0,
         "mass_at_k": 0.0,
@@ -105,32 +191,20 @@ def evaluate_policy(
         "counterfactual_drop_topk": 0.0,
     }
 
-    for query_text, expected_mem_ids in queries:
+    retriever = Retriever(
+        store,
+        index,
+        FieldScorer(),
+        router=router,
+        lexical_index=lexical_index,
+    )
+    for query, expected_mem_ids in cached_queries:
+        count += 1
         # 第一次跑：用于触发路由缓存，准备一致性对比。
-        retrieve_top_k(
-            query_text,
-            encoder,
-            vectorizer,
-            store,
-            index,
-            lexical_index=lexical_index,
-            top_n=top_n,
-            top_k=top_k,
-            router=router,
-        )
+        retriever.retrieve(query, top_n=top_n, top_k=top_k)
 
         # 第二次跑：读取 route_output，得到“同一 query 重复跑”的一致性指标。
-        results = retrieve_top_k(
-            query_text,
-            encoder,
-            vectorizer,
-            store,
-            index,
-            lexical_index=lexical_index,
-            top_n=top_n,
-            top_k=top_k,
-            router=router,
-        )
+        results = retriever.retrieve(query, top_n=top_n, top_k=top_k)
         hit_ids = [result.mem_id for result in results]
         total_recall += recall_at_k(hit_ids, expected_mem_ids)
         total_mrr += mrr(hit_ids, expected_mem_ids)
@@ -141,7 +215,7 @@ def evaluate_policy(
             for key in metric_sums:
                 metric_sums[key] += route_output.metrics.get(key, 0.0)
 
-    count = len(queries) or 1
+    count = max(1, count)
     averages = {
         "recall_at_k": total_recall / count,
         "mrr": total_mrr / count,
@@ -164,6 +238,11 @@ def main() -> None:
     encoder = HFSentenceEncoder(model_name="intfloat/multilingual-e5-small", tokenizer="jieba")
     vectorizer = Vectorizer(strategy="token_pool_topk", k=8)
     store, index, lexical_index = build_memory_index(items, encoder, vectorizer, return_lexical=True)
+    if EVAL_CACHE_PATH.exists():
+        print(f"检测到缓存文件，直接读取: {EVAL_CACHE_PATH}")
+    else:
+        write_cached_queries(EVAL_CACHE_PATH, queries, encoder, vectorizer)
+        print(f"已生成缓存文件: {EVAL_CACHE_PATH}")
 
     top_n = 10
     top_k = 5
@@ -190,9 +269,7 @@ def main() -> None:
             print(f"  -> 开始评估 policy={policy}")
             metrics = evaluate_policy(
                 policy,
-                queries,
-                encoder,
-                vectorizer,
+                iter_cached_queries(EVAL_CACHE_PATH),
                 store,
                 index,
                 lexical_index,
