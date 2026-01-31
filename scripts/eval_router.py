@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
@@ -28,13 +29,19 @@ from src.memory_indexer.encoder.hf_sentence import HFSentenceEncoder
 from src.memory_indexer.utils import normalize
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-MEMORY_PATH = DATA_DIR / "memory.jsonl"
-EVAL_PATH = DATA_DIR / "eval.jsonl"
-EVAL_CACHE_PATH = DATA_DIR / "eval_cache.jsonl"
+
+
+def resolve_dataset_paths(dataset: str) -> Tuple[Path, Path, Path]:
+    """根据数据集名称解析路径，默认采用 normal。"""
+
+    memory_path = DATA_DIR / f"memory_{dataset}.jsonl"
+    eval_path = DATA_DIR / f"eval_{dataset}.jsonl"
+    cache_path = DATA_DIR / f"eval_cache_{dataset}.jsonl"
+    return memory_path, eval_path, cache_path
 
 
 def load_memory_items(path: Path) -> List[MemoryItem]:
-    """读取 memory.jsonl，转换为 MemoryItem 列表。"""
+    """读取 memory_xxx.jsonl，转换为 MemoryItem 列表。"""
 
     payloads: List[Dict[str, object]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -53,7 +60,7 @@ def load_memory_items(path: Path) -> List[MemoryItem]:
 
 
 def load_eval_queries(path: Path) -> List[Tuple[str, List[str]]]:
-    """读取 eval.jsonl，返回 (query_text, expected_mem_ids)。"""
+    """读取 eval_xxx.jsonl，返回 (query_text, expected_mem_ids)。"""
 
     queries: List[Tuple[str, List[str]]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -228,27 +235,37 @@ def evaluate_policy(
 def main() -> None:
     """入口：运行软/半硬/硬路由对比评测。"""
 
-    if not MEMORY_PATH.exists() or not EVAL_PATH.exists():
-        raise FileNotFoundError("缺少 data/memory.jsonl 或 data/eval.jsonl")
+    parser = argparse.ArgumentParser(description="运行路由评测集")
+    parser.add_argument(
+        "--dataset",
+        choices=("normal", "easy"),
+        default="normal",
+        help="选择评测集 (default: normal)",
+    )
+    args = parser.parse_args()
+
+    memory_path, eval_path, cache_path = resolve_dataset_paths(args.dataset)
+    if not memory_path.exists() or not eval_path.exists():
+        raise FileNotFoundError(f"缺少数据集文件: {memory_path.name} / {eval_path.name}")
 
     set_trace(False)
-    items = load_memory_items(MEMORY_PATH)
-    queries = load_eval_queries(EVAL_PATH)
+    items = load_memory_items(memory_path)
+    queries = load_eval_queries(eval_path)
 
     encoder = HFSentenceEncoder(model_name="intfloat/multilingual-e5-small", tokenizer="jieba")
     vectorizer = Vectorizer(strategy="token_pool_topk", k=8)
     store, index, lexical_index = build_memory_index(items, encoder, vectorizer, return_lexical=True)
-    if EVAL_CACHE_PATH.exists():
-        print(f"检测到缓存文件，直接读取: {EVAL_CACHE_PATH}")
+    if cache_path.exists():
+        print(f"检测到缓存文件，直接读取: {cache_path}")
     else:
-        write_cached_queries(EVAL_CACHE_PATH, queries, encoder, vectorizer)
-        print(f"已生成缓存文件: {EVAL_CACHE_PATH}")
+        write_cached_queries(cache_path, queries, encoder, vectorizer)
+        print(f"已生成缓存文件: {cache_path}")
 
-    top_n = 10
+    top_n = 50
     top_k = 5
 
     print("\n=== 小评测集 ===")
-    print(f"样本数: {len(queries)} | top_n={top_n} | top_k={top_k}")
+    print(f"样本数: {len(queries)} | top_n={top_n} | top_k={top_k} | dataset={args.dataset}")
     print("阶段 1/3: 构建索引与编码器完成，开始跑 ablation。")
 
     # ablation 组：固定通道权重来观察证据价值与变硬风险。
@@ -269,7 +286,7 @@ def main() -> None:
             print(f"  -> 开始评估 policy={policy}")
             metrics = evaluate_policy(
                 policy,
-                iter_cached_queries(EVAL_CACHE_PATH),
+                iter_cached_queries(cache_path),
                 store,
                 index,
                 lexical_index,
