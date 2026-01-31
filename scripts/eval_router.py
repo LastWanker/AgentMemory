@@ -31,13 +31,14 @@ from src.memory_indexer.utils import normalize
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
-def resolve_dataset_paths(dataset: str) -> Tuple[Path, Path, Path]:
+def resolve_dataset_paths(dataset: str) -> Tuple[Path, Path, Path, Path]:
     """根据数据集名称解析路径，默认采用 normal。"""
 
     memory_path = DATA_DIR / f"memory_{dataset}.jsonl"
     eval_path = DATA_DIR / f"eval_{dataset}.jsonl"
     cache_path = DATA_DIR / f"eval_cache_{dataset}.jsonl"
-    return memory_path, eval_path, cache_path
+    memory_cache_path = DATA_DIR / f"memory_cache_{dataset}.jsonl"
+    return memory_path, eval_path, cache_path, memory_cache_path
 
 
 def load_memory_items(path: Path) -> List[MemoryItem]:
@@ -244,7 +245,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    memory_path, eval_path, cache_path = resolve_dataset_paths(args.dataset)
+    memory_path, eval_path, cache_path, memory_cache_path = resolve_dataset_paths(args.dataset)
     if not memory_path.exists() or not eval_path.exists():
         raise FileNotFoundError(f"缺少数据集文件: {memory_path.name} / {eval_path.name}")
 
@@ -254,7 +255,13 @@ def main() -> None:
 
     encoder = HFSentenceEncoder(model_name="intfloat/multilingual-e5-small", tokenizer="jieba")
     vectorizer = Vectorizer(strategy="token_pool_topk", k=8)
-    store, index, lexical_index = build_memory_index(items, encoder, vectorizer, return_lexical=True)
+    store, index, lexical_index = build_memory_index(
+        items,
+        encoder,
+        vectorizer,
+        cache_path=memory_cache_path,
+        return_lexical=True,
+    )
     if cache_path.exists():
         print(f"检测到缓存文件，直接读取: {cache_path}")
     else:

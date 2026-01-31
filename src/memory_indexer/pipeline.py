@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
+import json
+from pathlib import Path
 import uuid
 
 from .encoder.base import Encoder
@@ -16,11 +18,68 @@ from .vectorizer import Vectorizer
 from .trace import trace, trace_progress
 
 
+def _load_memory_cache(
+    cache_path: Optional[Path],
+    encoder_id: str,
+    strategy: str,
+) -> Dict[str, Dict[str, object]]:
+    if not cache_path or not cache_path.exists():
+        return {}
+    payloads: Dict[str, Dict[str, object]] = {}
+    for line in cache_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        payload = json.loads(line)
+        if payload.get("encoder_id") != encoder_id or payload.get("strategy") != strategy:
+            continue
+        mem_id = payload.get("mem_id")
+        if isinstance(mem_id, str):
+            payloads[mem_id] = payload
+    if payloads:
+        trace(f"检测到记忆缓存: {cache_path} | entries={len(payloads)}")
+    return payloads
+
+
+def _build_memory_cache_payload(
+    item: MemoryItem,
+    encoder_id: str,
+    strategy: str,
+    m_vecs: List[List[float]],
+    coarse_vec: Optional[List[float]],
+    aux: Dict[str, List[str]],
+    tokens: List[str],
+) -> Dict[str, object]:
+    return {
+        "mem_id": item.mem_id,
+        "text": item.text,
+        "encoder_id": encoder_id,
+        "strategy": strategy,
+        "vecs": m_vecs,
+        "coarse_vec": coarse_vec,
+        "aux": {**aux, "tokens": tokens},
+        "tokens": tokens,
+    }
+
+
+def _write_memory_cache(
+    cache_path: Path,
+    items: List[MemoryItem],
+    cached_payloads: Dict[str, Dict[str, object]],
+) -> None:
+    with cache_path.open("w", encoding="utf-8") as handle:
+        for item in items:
+            payload = cached_payloads.get(item.mem_id)
+            if not payload:
+                continue
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
 def build_memory_index(
     memory_items: Iterable[MemoryItem],
     encoder: Encoder,
     vectorizer: Vectorizer,
     *,
+    cache_path: Optional[Path] = None,
     return_lexical: bool = False,
 ) -> Tuple[MemoryStore, CoarseIndex] | Tuple[MemoryStore, CoarseIndex, LexicalIndex]:
     """构建记忆库索引。
@@ -33,14 +92,41 @@ def build_memory_index(
     store = MemoryStore()
     index = CoarseIndex()
     lexical_index = LexicalIndex()
+    cached_payloads = _load_memory_cache(cache_path, encoder.encoder_id, vectorizer.strategy)
+    cache_hits = 0
+    cache_misses = 0
 
     trace("开始构建记忆库索引")
     progress = trace_progress("建库进度", total=len(items))
     for idx, item in enumerate(items, start=1):
-        token_vecs, tokens = encoder.encode_tokens(item.text)
-        m_vecs, aux = vectorizer.make_group(token_vecs, tokens, item.text)
-        m_vecs = [normalize(v) for v in m_vecs]
-        coarse_vec = normalize(encoder.encode_sentence(item.text))
+        cached = cached_payloads.get(item.mem_id)
+        cache_ok = bool(cached and cached.get("text") == item.text)
+        if cache_ok:
+            token_vecs = []
+            payload_tokens = cached.get("tokens") or []
+            payload_aux = cached.get("aux") or {}
+            if "tokens" in payload_aux and not payload_tokens:
+                payload_tokens = payload_aux.get("tokens") or []
+            aux = {k: v for k, v in payload_aux.items() if k != "tokens"}
+            tokens = payload_tokens
+            m_vecs = cached.get("vecs") or []
+            coarse_vec = cached.get("coarse_vec")
+            cache_hits += 1
+        else:
+            token_vecs, tokens = encoder.encode_tokens(item.text)
+            m_vecs, aux = vectorizer.make_group(token_vecs, tokens, item.text)
+            m_vecs = [normalize(v) for v in m_vecs]
+            coarse_vec = normalize(encoder.encode_sentence(item.text))
+            cached_payloads[item.mem_id] = _build_memory_cache_payload(
+                item,
+                encoder.encoder_id,
+                vectorizer.strategy,
+                m_vecs,
+                coarse_vec,
+                aux,
+                tokens,
+            )
+            cache_misses += 1
         emb = EmbeddingRecord(
             emb_id=str(uuid.uuid4()),
             mem_id=item.mem_id,
@@ -58,6 +144,11 @@ def build_memory_index(
         progress.update(idx)
 
     progress.finish()
+    if cache_path:
+        _write_memory_cache(cache_path, items, cached_payloads)
+        trace(
+            f"记忆缓存更新完成: {cache_path} | hit={cache_hits} | miss={cache_misses}"
+        )
     trace("记忆库索引构建完成")
     if return_lexical:
         return store, index, lexical_index
