@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import os
+from pathlib import Path
 import torch
 import time
 
@@ -25,12 +26,11 @@ class HFSentenceEncoder(Encoder):
         model_name: str = "intfloat/multilingual-e5-small",
         tokenizer: TokenizerInput = "jieba",
         use_e5_prefix: bool = True,
-        local_files_only: bool = False,
+        local_files_only: Optional[bool] = None,
     ) -> None:
         super().__init__(encoder_id=f"hf-sentence@{model_name}")
         timing_log = os.getenv("MEMORY_ENCODER_TIMING", "0") == "1"
-        if os.getenv("HF_LOCAL_FILES_ONLY") is not None:
-            local_files_only = os.getenv("HF_LOCAL_FILES_ONLY", "0") == "1"
+        local_files_only = self._resolve_local_files_only(model_name, local_files_only)
         t0 = time.time()
         if timing_log:
             print(f"[TIMING] T0 start={t0:.2f}")
@@ -59,6 +59,51 @@ class HFSentenceEncoder(Encoder):
             _ = self.model.encode("hello", normalize_embeddings=True)
             print(f"[TIMING] T2 first_encode={time.time() - t:.2f}s")
             print(f"[TIMING] TOTAL={time.time() - t0:.2f}s")
+
+    @staticmethod
+    def _resolve_local_files_only(model_name: str, local_files_only: Optional[bool]) -> bool:
+        if os.getenv("HF_LOCAL_FILES_ONLY") is not None:
+            return os.getenv("HF_LOCAL_FILES_ONLY", "0") == "1"
+        if os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("TRANSFORMERS_OFFLINE") == "1":
+            return True
+        if local_files_only is not None:
+            return local_files_only
+        if os.getenv("HF_HUB_ONLINE") == "1" or os.getenv("TRANSFORMERS_ONLINE") == "1":
+            return False
+        if os.path.isdir(model_name):
+            return True
+        cache_dir = HFSentenceEncoder._hf_cache_dir()
+        if cache_dir and HFSentenceEncoder._cached_model_exists(cache_dir, model_name):
+            return True
+        return True
+
+    @staticmethod
+    def _hf_cache_dir() -> Optional[Path]:
+        env_candidates = (
+            os.getenv("HUGGINGFACE_HUB_CACHE"),
+            os.getenv("HF_HUB_CACHE"),
+            os.getenv("TRANSFORMERS_CACHE"),
+        )
+        for candidate in env_candidates:
+            if candidate:
+                return Path(candidate).expanduser()
+        hf_home = os.getenv("HF_HOME")
+        if hf_home:
+            return Path(hf_home).expanduser() / "hub"
+        default = Path.home() / ".cache" / "huggingface" / "hub"
+        if default.exists():
+            return default
+        return None
+
+    @staticmethod
+    def _cached_model_exists(cache_dir: Path, model_name: str) -> bool:
+        if "/" in model_name:
+            cache_key = f"models--{model_name.replace('/', '--')}"
+            model_dir = cache_dir / cache_key
+            snapshots_dir = model_dir / "snapshots"
+            if snapshots_dir.exists() and any(snapshots_dir.iterdir()):
+                return True
+        return False
 
     def _maybe_prefix(self, text: str, *, is_query: bool) -> str:
         if self.use_e5_prefix and "e5" in self.model_name.lower():
