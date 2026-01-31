@@ -91,7 +91,7 @@ def build_memory_index(
     items = list(memory_items)
     store = MemoryStore()
     index = CoarseIndex()
-    lexical_index = LexicalIndex()
+    lexical_index = LexicalIndex() if return_lexical else None
     cached_payloads = _load_memory_cache(cache_path, encoder.encoder_id, vectorizer.strategy)
     cache_hits = 0
     cache_misses = 0
@@ -140,7 +140,8 @@ def build_memory_index(
         )
         store.add(item, emb, tokens)
         index.add(item.mem_id, coarse_vec)
-        lexical_index.add(item.mem_id, tokens)
+        if lexical_index:
+            lexical_index.add(item.mem_id, tokens)
         progress.update(idx)
 
     progress.finish()
@@ -150,7 +151,7 @@ def build_memory_index(
             f"记忆缓存更新完成: {cache_path} | hit={cache_hits} | miss={cache_misses}"
         )
     trace("记忆库索引构建完成")
-    if return_lexical:
+    if return_lexical and lexical_index:
         return store, index, lexical_index
     return store, index
 

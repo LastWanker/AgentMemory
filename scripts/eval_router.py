@@ -2,13 +2,14 @@
 
 说明：
 - 这个脚本只依赖本仓库最小可用编码器，用于稳定、可复现的对比。
-- 每条 query 会“重复跑两次”，第二次的路由输出用于一致性指标。
+- 默认每条 query 会“重复跑两次”，第二次的路由输出用于一致性指标。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 import uuid
@@ -182,6 +183,7 @@ def evaluate_policy(
     lexical_index,
     top_n: int,
     top_k: int,
+    consistency_pass: bool = True,
     fixed_channel_weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
     """评估单个路由策略，返回平均指标。"""
@@ -209,7 +211,8 @@ def evaluate_policy(
     for query, expected_mem_ids in cached_queries:
         count += 1
         # 第一次跑：用于触发路由缓存，准备一致性对比。
-        retriever.retrieve(query, top_n=top_n, top_k=top_k)
+        if consistency_pass:
+            retriever.retrieve(query, top_n=top_n, top_k=top_k)
 
         # 第二次跑：读取 route_output，得到“同一 query 重复跑”的一致性指标。
         results = retriever.retrieve(query, top_n=top_n, top_k=top_k)
@@ -243,33 +246,127 @@ def main() -> None:
         default="normal",
         help="选择评测集 (default: normal)",
     )
+    parser.add_argument(
+        "--top-n",
+        type=int,
+        default=50,
+        help="粗召回数量 top_n (default: 50)",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=5,
+        help="最终输出 top_k (default: 5)",
+    )
+    # 下面这些参数用于开关耗时点，便于组合使用。
+    parser.add_argument(
+        "--no-consistency-pass",
+        action="store_true",
+        help="关闭每条 query 的第二次检索（不计算一致性对比）",
+    )
+    parser.add_argument(
+        "--policies",
+        default="soft,half_hard,hard",
+        help="只评估指定 policy，逗号分隔 (soft/half_hard/hard)",
+    )
+    parser.add_argument(
+        "--ablation",
+        choices=("baseline",),
+        help="快捷：只跑 baseline(auto) 组",
+    )
+    parser.add_argument(
+        "--ablation-groups",
+        help="精确挑选 ablation 组名，逗号分隔",
+    )
+    parser.add_argument(
+        "--no-lexical",
+        action="store_true",
+        help="关闭词法通道（不构建 lexical_index）",
+    )
+    parser.add_argument(
+        "--rebuild-cache",
+        action="store_true",
+        help="强制重建 query/memory 缓存",
+    )
+    parser.add_argument(
+        "--encoder-timing",
+        action="store_true",
+        help="输出 encoder 构建与首轮编码的耗时",
+    )
+    trace_group = parser.add_mutually_exclusive_group()
+    trace_group.add_argument("--trace", action="store_true", help="开启运行 trace 输出")
+    trace_group.add_argument("--no-trace", action="store_true", help="关闭运行 trace 输出")
+    hf_group = parser.add_mutually_exclusive_group()
+    hf_group.add_argument("--hf-offline", action="store_true", help="强制 HF 离线加载")
+    hf_group.add_argument("--hf-online", action="store_true", help="强制 HF 在线加载")
+    hf_group.add_argument("--hf-local-only", action="store_true", help="仅使用本地 HF 模型缓存")
     args = parser.parse_args()
+
+    if args.trace:
+        set_trace(True)
+    elif args.no_trace:
+        set_trace(False)
+    else:
+        set_trace(False)
+
+    if args.encoder_timing:
+        os.environ["MEMORY_ENCODER_TIMING"] = "1"
+
+    if args.hf_offline:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        os.environ["HF_LOCAL_FILES_ONLY"] = "1"
+    elif args.hf_online:
+        os.environ["HF_HUB_ONLINE"] = "1"
+        os.environ["TRANSFORMERS_ONLINE"] = "1"
+        os.environ["HF_HUB_OFFLINE"] = "0"
+        os.environ["TRANSFORMERS_OFFLINE"] = "0"
+        os.environ["HF_LOCAL_FILES_ONLY"] = "0"
+    elif args.hf_local_only:
+        os.environ["HF_LOCAL_FILES_ONLY"] = "1"
 
     memory_path, eval_path, cache_path, memory_cache_path = resolve_dataset_paths(args.dataset)
     if not memory_path.exists() or not eval_path.exists():
         raise FileNotFoundError(f"缺少数据集文件: {memory_path.name} / {eval_path.name}")
 
-    set_trace(False)
+    if args.rebuild_cache:
+        if cache_path.exists():
+            cache_path.unlink()
+            print(f"已删除 query 缓存: {cache_path}")
+        if memory_cache_path.exists():
+            memory_cache_path.unlink()
+            print(f"已删除 memory 缓存: {memory_cache_path}")
+
     items = load_memory_items(memory_path)
     queries = load_eval_queries(eval_path)
 
     encoder = HFSentenceEncoder(model_name="intfloat/multilingual-e5-small", tokenizer="jieba")
     vectorizer = Vectorizer(strategy="token_pool_topk", k=8)
-    store, index, lexical_index = build_memory_index(
-        items,
-        encoder,
-        vectorizer,
-        cache_path=memory_cache_path,
-        return_lexical=True,
-    )
+    if args.no_lexical:
+        store, index = build_memory_index(
+            items,
+            encoder,
+            vectorizer,
+            cache_path=memory_cache_path,
+            return_lexical=False,
+        )
+        lexical_index = None
+    else:
+        store, index, lexical_index = build_memory_index(
+            items,
+            encoder,
+            vectorizer,
+            cache_path=memory_cache_path,
+            return_lexical=True,
+        )
     if cache_path.exists():
         print(f"检测到缓存文件，直接读取: {cache_path}")
     else:
         write_cached_queries(cache_path, queries, encoder, vectorizer)
         print(f"已生成缓存文件: {cache_path}")
 
-    top_n = 50
-    top_k = 5
+    top_n = args.top_n
+    top_k = args.top_k
 
     print("\n=== 小评测集 ===")
     print(f"样本数: {len(queries)} | top_n={top_n} | top_k={top_k} | dataset={args.dataset}")
@@ -284,12 +381,29 @@ def main() -> None:
         ("S+L+M", {"semantic": 0.6, "lexical": 0.25, "meta": 0.15, "coarse": 0.0}),
         ("L-only", {"semantic": 0.0, "lexical": 1.0, "meta": 0.0, "coarse": 0.0}),
     ]
+    ablation_lookup = {name: weights for name, weights in ablation_groups}
+    if args.ablation and args.ablation_groups:
+        raise ValueError("--ablation 与 --ablation-groups 不能同时使用")
+    if args.ablation == "baseline":
+        ablation_groups = [("baseline(auto)", ablation_lookup["baseline(auto)"])]
+    if args.ablation_groups:
+        requested = [name.strip() for name in args.ablation_groups.split(",") if name.strip()]
+        missing = [name for name in requested if name not in ablation_lookup]
+        if missing:
+            raise ValueError(f"未知 ablation 组: {', '.join(missing)}")
+        ablation_groups = [(name, ablation_lookup[name]) for name in requested]
+
+    policies = [name.strip() for name in args.policies.split(",") if name.strip()]
+    allowed_policies = {"soft", "half_hard", "hard"}
+    invalid_policies = [name for name in policies if name not in allowed_policies]
+    if invalid_policies:
+        raise ValueError(f"未知 policy: {', '.join(invalid_policies)}")
 
     for group_name, fixed_weights in ablation_groups:
         print("\n" + "=" * 72)
         print(f"阶段 2/3: ablation={group_name} | fixed_weights={fixed_weights}")
         print("=" * 72)
-        for policy in ("soft", "half_hard", "hard"):
+        for policy in policies:
             print(f"  -> 开始评估 policy={policy}")
             metrics = evaluate_policy(
                 policy,
@@ -299,6 +413,7 @@ def main() -> None:
                 lexical_index,
                 top_n,
                 top_k,
+                consistency_pass=not args.no_consistency_pass,
                 fixed_channel_weights=fixed_weights,
             )
             print(f"  [policy={policy}]")
