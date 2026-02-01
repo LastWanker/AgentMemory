@@ -181,3 +181,4 @@ cython_debug/
 .cursorindexingignore
 data/eval_cache.jsonl
 data/memory_cache_normal.jsonl
+data/memory_cache_normal.jsonl
