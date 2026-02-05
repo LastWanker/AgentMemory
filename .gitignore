@@ -182,3 +182,4 @@ cython_debug/
 data/eval_cache.jsonl
 data/memory_cache_normal.jsonl
 data/memory_cache_normal.jsonl
+data/eval_cache_normal.jsonl

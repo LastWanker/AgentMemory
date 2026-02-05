@@ -113,6 +113,7 @@ class HFSentenceEncoder(Encoder):
         return text
 
     def encode_sentence(self, text: str) -> Vector:
+        # print("[TRACE] 进入 encode_sentence")
         sent = self._maybe_prefix(text, is_query=False)
         vec = self.model.encode(sent, normalize_embeddings=True).tolist()
         return vec
