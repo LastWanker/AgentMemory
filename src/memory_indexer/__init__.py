@@ -3,6 +3,7 @@
 from .models import EmbeddingRecord, MemoryItem, Query, RetrieveResult, RouteOutput
 from .encoder.base import Encoder
 from .encoder.simple import SimpleHashEncoder
+from .encoder.e5_token import E5TokenEncoder
 from .vectorizer import Vectorizer
 from .index import CoarseIndex, LexicalIndex
 from .scorer import FieldScorer
@@ -21,6 +22,7 @@ __all__ = [
     "RouteOutput",
     "Encoder",
     "SimpleHashEncoder",
+    "E5TokenEncoder",
     "Vectorizer",
     "CoarseIndex",
     "LexicalIndex",

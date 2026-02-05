@@ -275,7 +275,9 @@ class Retriever:
             raise ValueError("查询向量尚未构建")
 
         candidates = self.index.search(q.coarse_vec, top_n=top_n)
-        query_tokens = q.aux.get("tokens", []) if q.aux else []
+        query_tokens = q.aux.get("lex_tokens") if q.aux else None
+        if not query_tokens:
+            query_tokens = q.aux.get("tokens", []) if q.aux else []
         lexical_scores = self._build_lexical_scores(query_tokens, top_n=top_n)
         scored: List[Tuple[str, Dict[str, float], float, float, Dict[str, List[float]]]] = []
         for mem_id, coarse_score in candidates:

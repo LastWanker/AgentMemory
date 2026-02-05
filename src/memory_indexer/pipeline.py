@@ -16,6 +16,25 @@ from .store import MemoryStore
 from .utils import normalize
 from .vectorizer import Vectorizer
 from .trace import trace, trace_progress
+from .tokenizers import TokenizerInput, resolve_tokenizer
+
+
+def _compose_encoder_id(sentence_encoder: Encoder, token_encoder: Encoder) -> str:
+    if sentence_encoder.encoder_id == token_encoder.encoder_id:
+        return sentence_encoder.encoder_id
+    return f"{sentence_encoder.encoder_id}|{token_encoder.encoder_id}"
+
+
+def _resolve_lex_tokenizer(
+    encoder: Encoder, lex_tokenizer: TokenizerInput
+) -> object:
+    if lex_tokenizer is not None:
+        return resolve_tokenizer(lex_tokenizer)
+    if hasattr(encoder, "tokenizer"):
+        encoder_tokenizer = getattr(encoder, "tokenizer")
+        if hasattr(encoder_tokenizer, "tokenize"):
+            return encoder_tokenizer
+    return resolve_tokenizer(None)
 
 
 def _load_memory_cache(
@@ -47,7 +66,8 @@ def _build_memory_cache_payload(
     m_vecs: List[List[float]],
     coarse_vec: Optional[List[float]],
     aux: Dict[str, List[str]],
-    tokens: List[str],
+    lex_tokens: List[str],
+    model_tokens: List[str],
 ) -> Dict[str, object]:
     return {
         "mem_id": item.mem_id,
@@ -56,8 +76,15 @@ def _build_memory_cache_payload(
         "strategy": strategy,
         "vecs": m_vecs,
         "coarse_vec": coarse_vec,
-        "aux": {**aux, "tokens": tokens},
-        "tokens": tokens,
+        "aux": {
+            **aux,
+            "lex_tokens": lex_tokens,
+            "model_tokens": model_tokens,
+            "tokens": lex_tokens,
+        },
+        "tokens": lex_tokens,
+        "lex_tokens": lex_tokens,
+        "model_tokens": model_tokens,
     }
 
 
@@ -79,6 +106,8 @@ def build_memory_index(
     encoder: Encoder,
     vectorizer: Vectorizer,
     *,
+    token_encoder: Optional[Encoder] = None,
+    lex_tokenizer: TokenizerInput = None,
     cache_path: Optional[Path] = None,
     return_lexical: bool = False,
 ) -> Tuple[MemoryStore, CoarseIndex] | Tuple[MemoryStore, CoarseIndex, LexicalIndex]:
@@ -89,10 +118,14 @@ def build_memory_index(
     """
 
     items = list(memory_items)
+    sentence_encoder = encoder
+    token_encoder = token_encoder or encoder
+    lex_tokenizer_resolved = _resolve_lex_tokenizer(sentence_encoder, lex_tokenizer)
     store = MemoryStore()
     index = CoarseIndex()
     lexical_index = LexicalIndex() if return_lexical else None
-    cached_payloads = _load_memory_cache(cache_path, encoder.encoder_id, vectorizer.strategy)
+    encoder_id = _compose_encoder_id(sentence_encoder, token_encoder)
+    cached_payloads = _load_memory_cache(cache_path, encoder_id, vectorizer.strategy)
     cache_hits = 0
     cache_misses = 0
 
@@ -105,43 +138,65 @@ def build_memory_index(
             token_vecs = []
             payload_tokens = cached.get("tokens") or []
             payload_aux = cached.get("aux") or {}
-            if "tokens" in payload_aux and not payload_tokens:
-                payload_tokens = payload_aux.get("tokens") or []
-            aux = {k: v for k, v in payload_aux.items() if k != "tokens"}
-            tokens = payload_tokens
+            lex_tokens = (
+                cached.get("lex_tokens")
+                or payload_aux.get("lex_tokens")
+                or payload_tokens
+                or payload_aux.get("tokens")
+                or []
+            )
+            model_tokens = (
+                cached.get("model_tokens")
+                or payload_aux.get("model_tokens")
+                or payload_tokens
+                or payload_aux.get("tokens")
+                or []
+            )
+            aux = {
+                k: v
+                for k, v in payload_aux.items()
+                if k not in {"tokens", "lex_tokens", "model_tokens"}
+            }
             m_vecs = cached.get("vecs") or []
             coarse_vec = cached.get("coarse_vec")
             cache_hits += 1
         else:
-            token_vecs, tokens = encoder.encode_tokens(item.text)
-            m_vecs, aux = vectorizer.make_group(token_vecs, tokens, item.text)
+            token_vecs, model_tokens = token_encoder.encode_tokens(item.text)
+            m_vecs, aux = vectorizer.make_group(token_vecs, model_tokens, item.text)
             m_vecs = [normalize(v) for v in m_vecs]
-            coarse_vec = normalize(encoder.encode_sentence(item.text))
+            coarse_vec = normalize(sentence_encoder.encode_sentence(item.text))
+            lex_tokens = lex_tokenizer_resolved.tokenize(item.text)
             cached_payloads[item.mem_id] = _build_memory_cache_payload(
                 item,
-                encoder.encoder_id,
+                encoder_id,
                 vectorizer.strategy,
                 m_vecs,
                 coarse_vec,
                 aux,
-                tokens,
+                lex_tokens,
+                model_tokens,
             )
             cache_misses += 1
         emb = EmbeddingRecord(
             emb_id=str(uuid.uuid4()),
             mem_id=item.mem_id,
-            encoder_id=encoder.encoder_id,
+            encoder_id=encoder_id,
             strategy=vectorizer.strategy,
             dims=len(m_vecs[0]) if m_vecs else 0,
             n_vecs=len(m_vecs),
             vecs=m_vecs,
             coarse_vec=coarse_vec,
-            aux={**aux, "tokens": tokens},
+            aux={
+                **aux,
+                "lex_tokens": lex_tokens,
+                "model_tokens": model_tokens,
+                "tokens": lex_tokens,
+            },
         )
-        store.add(item, emb, tokens)
+        store.add(item, emb, lex_tokens)
         index.add(item.mem_id, coarse_vec)
         if lexical_index:
-            lexical_index.add(item.mem_id, tokens)
+            lexical_index.add(item.mem_id, lex_tokens)
         progress.update(idx)
 
     progress.finish()
@@ -166,21 +221,33 @@ def retrieve_top_k(
     top_n: int = 1000,
     top_k: int = 10,
     router: Router | None = None,
+    token_encoder: Optional[Encoder] = None,
+    lex_tokenizer: TokenizerInput = None,
 ) -> List[RetrieveResult]:
     """执行检索，并返回 top-k 结果。"""
 
     trace("开始构建查询向量")
-    token_vecs, tokens = encoder.encode_tokens(query_text)
-    q_vecs, aux = vectorizer.make_group(token_vecs, tokens, query_text)
+    sentence_encoder = encoder
+    token_encoder = token_encoder or encoder
+    lex_tokenizer_resolved = _resolve_lex_tokenizer(sentence_encoder, lex_tokenizer)
+    token_vecs, model_tokens = token_encoder.encode_tokens(query_text)
+    q_vecs, aux = vectorizer.make_group(token_vecs, model_tokens, query_text)
     q_vecs = [normalize(v) for v in q_vecs]
+    lex_tokens = lex_tokenizer_resolved.tokenize(query_text)
+    encoder_id = _compose_encoder_id(sentence_encoder, token_encoder)
     q = Query(
         query_id=str(uuid.uuid4()),
         text=query_text,
-        encoder_id=encoder.encoder_id,
+        encoder_id=encoder_id,
         strategy=vectorizer.strategy,
         q_vecs=q_vecs,
-        coarse_vec=normalize(encoder.encode_sentence(query_text)),
-        aux={**aux, "tokens": tokens},
+        coarse_vec=normalize(sentence_encoder.encode_sentence(query_text)),
+        aux={
+            **aux,
+            "lex_tokens": lex_tokens,
+            "model_tokens": model_tokens,
+            "tokens": lex_tokens,
+        },
     )
     trace("查询向量构建完成，进入检索")
     # 【关键修复】检索流程必须走 Retriever.retrieve()，否则 router 只是“装上方向盘”。
