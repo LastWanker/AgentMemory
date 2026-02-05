@@ -51,6 +51,8 @@ class HFSentenceEncoder(Encoder):
                 f"{cuda_available} | model_device={device} | "
                 f"model_load_s={model_elapsed:.2f} | tokenizer_load_s={tokenizer_elapsed:.2f}"
             )
+            if cuda_available and str(device).startswith("cuda"):
+                print("CUDA 最大显存（句向量初始化后）:", torch.cuda.max_memory_allocated())
         if timing_log:
             t = time.time()
             _ = self.tokenizer.tokenize("hello")

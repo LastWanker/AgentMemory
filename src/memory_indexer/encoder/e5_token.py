@@ -19,6 +19,7 @@ class E5TokenEncoder(Encoder):
     """E5 token-level 编码器：输出每个 subword 的向量。"""
 
     _cuda_logged = False
+    _cuda_mem_logged = False
 
     def __init__(
         self,
@@ -57,7 +58,8 @@ class E5TokenEncoder(Encoder):
                 f"{cuda_available} | model_device={self.device} | model_load_s={model_elapsed:.2f}"
             )
             if self.device.type == "cuda":
-                print("[DEVICE] E5TokenEncoder is running on CUDA")
+                print("[设备] E5TokenEncoder 正在使用 CUDA")
+                print("CUDA 最大显存（初始化后）:", torch.cuda.max_memory_allocated())
         if timing_log:
             t = time.time()
             _ = self.encode_tokens("hello")
@@ -88,6 +90,9 @@ class E5TokenEncoder(Encoder):
         inputs = {key: value.to(self.device) for key, value in inputs.items()}
         with torch.inference_mode():
             outputs = self.model(**inputs)
+        if self.device.type == "cuda" and not E5TokenEncoder._cuda_mem_logged:
+            E5TokenEncoder._cuda_mem_logged = True
+            print("CUDA 最大显存（首次 encode 后）:", torch.cuda.max_memory_allocated())
         hidden = outputs.last_hidden_state[0]
         input_ids = inputs["input_ids"][0].tolist()
         attention = inputs["attention_mask"][0].tolist()
