@@ -27,6 +27,7 @@ from src.memory_indexer import (
     set_trace,
 )
 from src.memory_indexer.encoder.hf_sentence import HFSentenceEncoder
+from src.memory_indexer.encoder.e5_token import E5TokenEncoder
 from src.memory_indexer.utils import normalize
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -93,63 +94,56 @@ def mrr(hit_ids: List[str], expected_ids: Iterable[str]) -> float:
     return 0.0
 
 
+def _compose_encoder_id(sentence_encoder: Encoder, token_encoder: Encoder) -> str:
+    if sentence_encoder.encoder_id == token_encoder.encoder_id:
+        return sentence_encoder.encoder_id
+    return f"{sentence_encoder.encoder_id}|{token_encoder.encoder_id}"
+
+
 def build_cached_queries(
     queries: List[Tuple[str, List[str]]],
-    encoder: Encoder,
+    sentence_encoder: Encoder,
+    token_encoder: Encoder,
     vectorizer: Vectorizer,
 ) -> Iterator[Dict[str, object]]:
     """预编码查询，避免在评测循环里重复编码。"""
 
-    texts = [query_text for query_text, _ in queries]
-
-    if isinstance(encoder, HFSentenceEncoder):
-        placeholder_vecs = encoder.encode_query_placeholder_batch(texts)
-        coarse_vecs = encoder.encode_sentence_batch(texts)
-        for (query_text, expected_ids), placeholder_vec, coarse_vec in zip(
-            queries, placeholder_vecs, coarse_vecs
-        ):
-            tokens = encoder.tokenizer.tokenize(query_text)
-            token_vecs = [placeholder_vec for _ in tokens]
-            q_vecs, aux = vectorizer.make_group(token_vecs, tokens, query_text)
-            q_vecs = [normalize(v) for v in q_vecs]
-            yield {
-                "query_id": str(uuid.uuid4()),
-                "query_text": query_text,
-                "expected_mem_ids": expected_ids,
-                "encoder_id": encoder.encoder_id,
-                "strategy": vectorizer.strategy,
-                "q_vecs": q_vecs,
-                "coarse_vec": normalize(coarse_vec),
-                "aux": {**aux, "tokens": tokens},
-            }
-        return
-
+    encoder_id = _compose_encoder_id(sentence_encoder, token_encoder)
     for query_text, expected_ids in queries:
-        token_vecs, tokens = encoder.encode_tokens(query_text)
-        q_vecs, aux = vectorizer.make_group(token_vecs, tokens, query_text)
+        token_vecs, model_tokens = token_encoder.encode_tokens(query_text)
+        q_vecs, aux = vectorizer.make_group(token_vecs, model_tokens, query_text)
         q_vecs = [normalize(v) for v in q_vecs]
+        lex_tokens = sentence_encoder.tokenizer.tokenize(query_text)
         yield {
             "query_id": str(uuid.uuid4()),
             "query_text": query_text,
             "expected_mem_ids": expected_ids,
-            "encoder_id": encoder.encoder_id,
+            "encoder_id": encoder_id,
             "strategy": vectorizer.strategy,
             "q_vecs": q_vecs,
-            "coarse_vec": normalize(encoder.encode_sentence(query_text)),
-            "aux": {**aux, "tokens": tokens},
+            "coarse_vec": normalize(sentence_encoder.encode_sentence(query_text)),
+            "aux": {
+                **aux,
+                "lex_tokens": lex_tokens,
+                "model_tokens": model_tokens,
+                "tokens": lex_tokens,
+            },
         }
 
 
 def write_cached_queries(
     path: Path,
     queries: List[Tuple[str, List[str]]],
-    encoder: Encoder,
+    sentence_encoder: Encoder,
+    token_encoder: Encoder,
     vectorizer: Vectorizer,
 ) -> None:
     """将预编码的 query 写入磁盘缓存文件。"""
 
     with path.open("w", encoding="utf-8") as handle:
-        for payload in build_cached_queries(queries, encoder, vectorizer):
+        for payload in build_cached_queries(
+            queries, sentence_encoder, token_encoder, vectorizer
+        ):
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
@@ -340,13 +334,17 @@ def main() -> None:
     items = load_memory_items(memory_path)
     queries = load_eval_queries(eval_path)
 
-    encoder = HFSentenceEncoder(model_name="intfloat/multilingual-e5-small", tokenizer="jieba")
+    sentence_encoder = HFSentenceEncoder(
+        model_name="intfloat/multilingual-e5-small", tokenizer="jieba"
+    )
+    token_encoder = E5TokenEncoder(model_name="intfloat/multilingual-e5-small")
     vectorizer = Vectorizer(strategy="token_pool_topk", k=8)
     if args.no_lexical:
         store, index = build_memory_index(
             items,
-            encoder,
+            sentence_encoder,
             vectorizer,
+            token_encoder=token_encoder,
             cache_path=memory_cache_path,
             return_lexical=False,
         )
@@ -354,15 +352,18 @@ def main() -> None:
     else:
         store, index, lexical_index = build_memory_index(
             items,
-            encoder,
+            sentence_encoder,
             vectorizer,
+            token_encoder=token_encoder,
             cache_path=memory_cache_path,
             return_lexical=True,
         )
     if cache_path.exists():
         print(f"检测到缓存文件，直接读取: {cache_path}")
     else:
-        write_cached_queries(cache_path, queries, encoder, vectorizer)
+        write_cached_queries(
+            cache_path, queries, sentence_encoder, token_encoder, vectorizer
+        )
         print(f"已生成缓存文件: {cache_path}")
 
     top_n = args.top_n

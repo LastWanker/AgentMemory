@@ -79,9 +79,9 @@ class E5TokenEncoder(Encoder):
         return text
 
     def encode_tokens(self, text: str) -> Tuple[List[Vector], List[str]]:
-        print("[TRACE] 进入 E5TokenEncoder.encode_tokens")
-        print("[TRACE] token_encoder.device =", self.device)
-        print("[TRACE] token_encoder.model param device =", next(self.model.parameters()).device)
+        # print("[TRACE] 进入 E5TokenEncoder.encode_tokens")
+        # print("[TRACE] token_encoder.device =", self.device)
+        # print("[TRACE] token_encoder.model param device =", next(self.model.parameters()).device)
 
         if not text.strip():
             return [], []
