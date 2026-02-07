@@ -10,7 +10,7 @@ from .utils import Vector, dot
 class FieldScorer:
     """字段级相似度：每个 query 向量在 memory 里找最佳匹配。"""
 
-    def __init__(self, top_k_per_q: int = 3):
+    def __init__(self, top_k_per_q: int = 1):
         self.top_k_per_q = top_k_per_q
 
     def score(self, q_vecs: List[Vector], m_vecs: List[Vector]) -> Tuple[float, Dict[str, List[float]]]:
