@@ -19,5 +19,16 @@ class Encoder(ABC):
         """返回 token 向量组和 token 字符串列表。"""
 
     @abstractmethod
+    def encode_query_sentence(self, text: str) -> Vector:
+        """返回 query 角色的句向量。"""
+
+    @abstractmethod
+    def encode_passage_sentence(self, text: str) -> Vector:
+        """返回 passage 角色的句向量。"""
+
     def encode_sentence(self, text: str) -> Vector:
-        """返回句向量。"""
+        """已废弃：请显式使用 query/passsage 角色方法。"""
+
+        raise RuntimeError(
+            "encode_sentence 已废弃，请 use encode_query_sentence / encode_passage_sentence"
+        )

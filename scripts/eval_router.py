@@ -121,12 +121,13 @@ def build_cached_queries(
             "encoder_id": encoder_id,
             "strategy": vectorizer.strategy,
             "q_vecs": q_vecs,
-            "coarse_vec": normalize(sentence_encoder.encode_sentence(query_text)),
+            "coarse_vec": normalize(sentence_encoder.encode_query_sentence(query_text)),
             "aux": {
                 **aux,
                 "lex_tokens": lex_tokens,
                 "model_tokens": model_tokens,
                 "tokens": lex_tokens,
+                "coarse_role": "query",
             },
         }
 
@@ -177,6 +178,7 @@ def evaluate_policy(
     lexical_index,
     top_n: int,
     top_k: int,
+    candidate_mode: str = "coarse",
     consistency_pass: bool = True,
     fixed_channel_weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
@@ -193,6 +195,8 @@ def evaluate_policy(
         "consistency": 0.0,
         "counterfactual_drop_top1": 0.0,
         "counterfactual_drop_topk": 0.0,
+        "candidate_size": 0.0,
+        "coarse_lexical_jaccard": 0.0,
     }
 
     retriever = Retriever(
@@ -206,10 +210,10 @@ def evaluate_policy(
         count += 1
         # 第一次跑：用于触发路由缓存，准备一致性对比。
         if consistency_pass:
-            retriever.retrieve(query, top_n=top_n, top_k=top_k)
+            retriever.retrieve(query, top_n=top_n, top_k=top_k, candidate_mode=candidate_mode)
 
         # 第二次跑：读取 route_output，得到“同一 query 重复跑”的一致性指标。
-        results = retriever.retrieve(query, top_n=top_n, top_k=top_k)
+        results = retriever.retrieve(query, top_n=top_n, top_k=top_k, candidate_mode=candidate_mode)
         hit_ids = [result.mem_id for result in results]
         total_recall += recall_at_k(hit_ids, expected_mem_ids)
         total_mrr += mrr(hit_ids, expected_mem_ids)
@@ -251,6 +255,12 @@ def main() -> None:
         type=int,
         default=5,
         help="最终输出 top_k (default: 5)",
+    )
+    parser.add_argument(
+        "--candidate-mode",
+        choices=("coarse", "lexical", "union"),
+        default="union",
+        help="候选池策略：coarse / lexical / union (default: union)",
     )
     # 下面这些参数用于开关耗时点，便于组合使用。
     parser.add_argument(
@@ -371,6 +381,7 @@ def main() -> None:
 
     print("\n=== 小评测集 ===")
     print(f"样本数: {len(queries)} | top_n={top_n} | top_k={top_k} | dataset={args.dataset}")
+    print(f"candidate_mode={args.candidate_mode}")
     print("阶段 1/3: 构建索引与编码器完成，开始跑 ablation。")
 
     # ablation 组：固定通道权重来观察证据价值与变硬风险。
@@ -414,6 +425,7 @@ def main() -> None:
                 lexical_index,
                 top_n,
                 top_k,
+                candidate_mode=args.candidate_mode,
                 consistency_pass=not args.no_consistency_pass,
                 fixed_channel_weights=fixed_weights,
             )
@@ -423,7 +435,12 @@ def main() -> None:
                 "    entropy={entropy:.3f} | mass@k={mass_at_k:.3f} | "
                 "consistency={consistency:.3f} | "
                 "cf_drop_top1={counterfactual_drop_top1:.3f} | "
-                "cf_drop_topk={counterfactual_drop_topk:.3f}".format(**metrics)
+                "cf_drop_topk={counterfactual_drop_topk:.3f}\n"
+                "    candidate_mode={candidate_mode} | candidate_size={candidate_size:.1f}"
+                " | coarse_lexical_jaccard={coarse_lexical_jaccard:.3f}".format(
+                    candidate_mode=args.candidate_mode,
+                    **metrics,
+                )
             )
         print("  完成该组 ablation。")
 

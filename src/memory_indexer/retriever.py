@@ -270,18 +270,37 @@ class Retriever:
         self.lexical_index = lexical_index
         self.recency_half_life_days = recency_half_life_days
 
-    def retrieve(self, q: Query, top_n: int = 1000, top_k: int = 10) -> List[RetrieveResult]:
+    def retrieve(
+        self,
+        q: Query,
+        top_n: int = 1000,
+        top_k: int = 10,
+        candidate_mode: str = "coarse",
+    ) -> List[RetrieveResult]:
         if q.coarse_vec is None or q.q_vecs is None:
             raise ValueError("查询向量尚未构建")
+        assert (q.aux or {}).get("coarse_role") == "query", (
+            "query coarse_vec 必须来自 encode_query_sentence"
+        )
 
-        candidates = self.index.search(q.coarse_vec, top_n=top_n)
         query_tokens = q.aux.get("lex_tokens") if q.aux else None
         if not query_tokens:
             query_tokens = q.aux.get("tokens", []) if q.aux else []
         lexical_scores = self._build_lexical_scores(query_tokens, top_n=top_n)
+
+        candidates, candidate_stats = self._build_candidates(
+            q=q,
+            query_tokens=query_tokens,
+            top_n=top_n,
+            candidate_mode=candidate_mode,
+        )
+
         scored: List[Tuple[str, Dict[str, float], float, float, Dict[str, List[float]]]] = []
         for mem_id, coarse_score in candidates:
             emb = self.store.embs[mem_id]
+            assert emb.aux.get("coarse_role") == "passage", (
+                "memory coarse_vec 必须来自 encode_passage_sentence"
+            )
             score, debug = self.scorer.score(q.q_vecs, emb.vecs)
             item = self.store.items[mem_id]
             doc_tokens = self.store.tokens.get(mem_id, [])
@@ -304,6 +323,13 @@ class Retriever:
             scored.append((mem_id, features, score, coarse_score, debug))
 
         route_output = self.router.route([(mem_id, features) for mem_id, features, _, _, _ in scored])
+        route_output.metrics["candidate_size"] = float(candidate_stats["candidate_size"])
+        route_output.explain["candidate_mode"] = [candidate_mode]
+        if "coarse_lexical_jaccard" in candidate_stats:
+            route_output.metrics["coarse_lexical_jaccard"] = float(
+                candidate_stats["coarse_lexical_jaccard"]
+            )
+
         results: List[RetrieveResult] = []
         for mem_id, features, score, coarse_score, debug in scored:
             if self.router.policy == "hard" and mem_id not in route_output.selected_ids:
@@ -327,6 +353,50 @@ class Retriever:
 
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:top_k]
+
+    def _build_candidates(
+        self,
+        *,
+        q: Query,
+        query_tokens: List[str],
+        top_n: int,
+        candidate_mode: str,
+    ) -> Tuple[List[Tuple[str, float]], Dict[str, float]]:
+        if candidate_mode not in {"coarse", "lexical", "union"}:
+            raise ValueError(f"未知 candidate_mode: {candidate_mode}")
+
+        coarse_candidates = self.index.search(q.coarse_vec or [], top_n=top_n)
+        lexical_candidates = []
+        if self.lexical_index:
+            lexical_candidates = self.lexical_index.search(query_tokens, top_n=top_n)
+
+        if candidate_mode == "coarse":
+            return coarse_candidates, {"candidate_size": float(len(coarse_candidates))}
+
+        if candidate_mode == "lexical":
+            if self.lexical_index is None:
+                raise ValueError("candidate_mode=lexical 需要可用的 lexical_index")
+            candidates = [(mem_id, 0.0) for mem_id, _ in lexical_candidates]
+            return candidates, {"candidate_size": float(len(candidates))}
+
+        # union: coarse ∪ lexical，coarse 分数按 coarse 路保留，缺失补 0.0。
+        if self.lexical_index is None:
+            raise ValueError("candidate_mode=union 需要可用的 lexical_index")
+        coarse_map = {mem_id: score for mem_id, score in coarse_candidates}
+        union_ids: List[str] = [mem_id for mem_id, _ in coarse_candidates]
+        for mem_id, _ in lexical_candidates:
+            if mem_id not in coarse_map:
+                union_ids.append(mem_id)
+
+        candidates = [(mem_id, float(coarse_map.get(mem_id, 0.0))) for mem_id in union_ids]
+        coarse_ids = {mem_id for mem_id, _ in coarse_candidates}
+        lexical_ids = {mem_id for mem_id, _ in lexical_candidates}
+        denom = len(coarse_ids | lexical_ids)
+        jaccard = (len(coarse_ids & lexical_ids) / denom) if denom else 1.0
+        return candidates, {
+            "candidate_size": float(len(candidates)),
+            "coarse_lexical_jaccard": float(jaccard),
+        }
 
     def _build_lexical_scores(self, query_tokens: List[str], top_n: int) -> Dict[str, float]:
         if not self.lexical_index:

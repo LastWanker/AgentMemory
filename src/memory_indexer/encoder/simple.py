@@ -27,10 +27,18 @@ class SimpleHashEncoder(Encoder):
         vectors = [normalize(stable_hash(token, self.dims)) for token in tokens]
         return vectors, tokens
 
-    def encode_sentence(self, text: str) -> Vector:
+    def _encode_sentence_impl(self, text: str) -> Vector:
         token_vecs, _ = self.encode_tokens(text)
         if not token_vecs:
             # 空文本兜底，返回全零向量
             return [0.0] * self.dims
         sentence_vec = normalize(mean(token_vecs))
         return sentence_vec
+
+    def encode_query_sentence(self, text: str) -> Vector:
+        # simple 编码器不依赖前缀语义，这里仅保持接口一致。
+        return self._encode_sentence_impl("query: " + text)
+
+    def encode_passage_sentence(self, text: str) -> Vector:
+        # simple 编码器不依赖前缀语义，这里仅保持接口一致。
+        return self._encode_sentence_impl("passage: " + text)

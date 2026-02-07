@@ -3,7 +3,6 @@
 from .models import EmbeddingRecord, MemoryItem, Query, RetrieveResult, RouteOutput
 from .encoder.base import Encoder
 from .encoder.simple import SimpleHashEncoder
-from .encoder.e5_token import E5TokenEncoder
 from .vectorizer import Vectorizer
 from .index import CoarseIndex, LexicalIndex
 from .scorer import FieldScorer
@@ -38,3 +37,11 @@ __all__ = [
     "set_trace",
     "trace",
 ]
+
+
+def __getattr__(name: str):
+    if name == "E5TokenEncoder":
+        from .encoder.e5_token import E5TokenEncoder
+
+        return E5TokenEncoder
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

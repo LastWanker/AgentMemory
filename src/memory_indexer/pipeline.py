@@ -18,6 +18,9 @@ from .vectorizer import Vectorizer
 from .trace import trace, trace_progress
 from .tokenizers import TokenizerInput, resolve_tokenizer
 
+COARSE_ROLE_QUERY = "query"
+COARSE_ROLE_PASSAGE = "passage"
+
 
 def _compose_encoder_id(sentence_encoder: Encoder, token_encoder: Encoder) -> str:
     if sentence_encoder.encoder_id == token_encoder.encoder_id:
@@ -81,7 +84,9 @@ def _build_memory_cache_payload(
             "lex_tokens": lex_tokens,
             "model_tokens": model_tokens,
             "tokens": lex_tokens,
+            "coarse_role": COARSE_ROLE_PASSAGE,
         },
+        "coarse_role": COARSE_ROLE_PASSAGE,
         "tokens": lex_tokens,
         "lex_tokens": lex_tokens,
         "model_tokens": model_tokens,
@@ -133,7 +138,12 @@ def build_memory_index(
     progress = trace_progress("建库进度", total=len(items))
     for idx, item in enumerate(items, start=1):
         cached = cached_payloads.get(item.mem_id)
-        cache_ok = bool(cached and cached.get("text") == item.text)
+        cache_ok = bool(
+            cached
+            and cached.get("text") == item.text
+            and (cached.get("coarse_role") or (cached.get("aux") or {}).get("coarse_role"))
+            == COARSE_ROLE_PASSAGE
+        )
         if cache_ok:
             token_vecs = []
             payload_tokens = cached.get("tokens") or []
@@ -157,6 +167,7 @@ def build_memory_index(
                 for k, v in payload_aux.items()
                 if k not in {"tokens", "lex_tokens", "model_tokens"}
             }
+            aux["coarse_role"] = COARSE_ROLE_PASSAGE
             m_vecs = cached.get("vecs") or []
             coarse_vec = cached.get("coarse_vec")
             cache_hits += 1
@@ -164,7 +175,7 @@ def build_memory_index(
             token_vecs, model_tokens = token_encoder.encode_tokens(item.text)
             m_vecs, aux = vectorizer.make_group(token_vecs, model_tokens, item.text)
             m_vecs = [normalize(v) for v in m_vecs]
-            coarse_vec = normalize(sentence_encoder.encode_sentence(item.text))
+            coarse_vec = normalize(sentence_encoder.encode_passage_sentence(item.text))
             lex_tokens = lex_tokenizer_resolved.tokenize(item.text)
             cached_payloads[item.mem_id] = _build_memory_cache_payload(
                 item,
@@ -194,6 +205,10 @@ def build_memory_index(
             },
         )
         store.add(item, emb, lex_tokens)
+        emb.aux["coarse_role"] = COARSE_ROLE_PASSAGE
+        assert emb.aux.get("coarse_role") == COARSE_ROLE_PASSAGE, (
+            "memory coarse_vec 必须来自 encode_passage_sentence"
+        )
         index.add(item.mem_id, coarse_vec)
         if lexical_index:
             lexical_index.add(item.mem_id, lex_tokens)
@@ -223,6 +238,7 @@ def retrieve_top_k(
     router: Router | None = None,
     token_encoder: Optional[Encoder] = None,
     lex_tokenizer: TokenizerInput = None,
+    candidate_mode: str = "coarse",
 ) -> List[RetrieveResult]:
     """执行检索，并返回 top-k 结果。"""
 
@@ -241,13 +257,17 @@ def retrieve_top_k(
         encoder_id=encoder_id,
         strategy=vectorizer.strategy,
         q_vecs=q_vecs,
-        coarse_vec=normalize(sentence_encoder.encode_sentence(query_text)),
+        coarse_vec=normalize(sentence_encoder.encode_query_sentence(query_text)),
         aux={
             **aux,
             "lex_tokens": lex_tokens,
             "model_tokens": model_tokens,
             "tokens": lex_tokens,
+            "coarse_role": COARSE_ROLE_QUERY,
         },
+    )
+    assert q.aux.get("coarse_role") == COARSE_ROLE_QUERY, (
+        "query coarse_vec 必须来自 encode_query_sentence"
     )
     trace("查询向量构建完成，进入检索")
     # 【关键修复】检索流程必须走 Retriever.retrieve()，否则 router 只是“装上方向盘”。
@@ -260,6 +280,11 @@ def retrieve_top_k(
         router=router,
         lexical_index=lexical_index,
     )
-    results = retriever.retrieve(q, top_n=top_n, top_k=top_k)
+    results = retriever.retrieve(
+        q,
+        top_n=top_n,
+        top_k=top_k,
+        candidate_mode=candidate_mode,
+    )
     trace(f"检索完成，输出 {len(results)} 条结果")
     return results

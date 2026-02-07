@@ -113,8 +113,15 @@ class E5TokenEncoder(Encoder):
 
         return token_vecs, token_strings
 
-    def encode_sentence(self, text: str) -> Vector:
-        token_vecs, _ = self.encode_tokens(text)
+    def _encode_sentence_with_role(self, text: str, *, is_query: bool) -> Vector:
+        payload = self._maybe_prefix(text, is_query=is_query)
+        token_vecs, _ = self.encode_tokens(payload)
         if not token_vecs:
             return [0.0] * (self.hidden_size or 1)
         return normalize(mean(token_vecs))
+
+    def encode_query_sentence(self, text: str) -> Vector:
+        return self._encode_sentence_with_role(text, is_query=True)
+
+    def encode_passage_sentence(self, text: str) -> Vector:
+        return self._encode_sentence_with_role(text, is_query=False)

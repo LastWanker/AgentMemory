@@ -108,15 +108,23 @@ class HFSentenceEncoder(Encoder):
         return False
 
     def _maybe_prefix(self, text: str, *, is_query: bool) -> str:
-        if self.use_e5_prefix and "e5" in self.model_name.lower():
-            return ("query: " if is_query else "passage: ") + text
-        return text
+        # coarse 角色必须显式区分 query / passage，避免混用导致召回偏移。
+        return ("query: " if is_query else "passage: ") + text
 
-    def encode_sentence(self, text: str) -> Vector:
-        # print("[TRACE] 进入 encode_sentence")
-        sent = self._maybe_prefix(text, is_query=False)
-        vec = self.model.encode(sent, normalize_embeddings=True).tolist()
+    def _encode_with_role(self, text: str, *, is_query: bool) -> Vector:
+        payload = self._maybe_prefix(text, is_query=is_query)
+        vec = self.model.encode(payload, normalize_embeddings=True).tolist()
         return vec
+
+    def encode_query_sentence(self, text: str) -> Vector:
+        """使用 query 前缀编码句向量（L2 归一化）。"""
+
+        return self._encode_with_role(text, is_query=True)
+
+    def encode_passage_sentence(self, text: str) -> Vector:
+        """使用 passage 前缀编码句向量（L2 归一化）。"""
+
+        return self._encode_with_role(text, is_query=False)
 
     def encode_sentence_batch(self, texts: List[str]) -> List[Vector]:
         sentences = [self._maybe_prefix(text, is_query=False) for text in texts]
