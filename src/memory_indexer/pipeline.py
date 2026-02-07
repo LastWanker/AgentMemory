@@ -238,7 +238,7 @@ def retrieve_top_k(
     router: Router | None = None,
     token_encoder: Optional[Encoder] = None,
     lex_tokenizer: TokenizerInput = None,
-    candidate_mode: str = "coarse",
+    candidate_mode: str = "union",
 ) -> List[RetrieveResult]:
     """执行检索，并返回 top-k 结果。"""
 

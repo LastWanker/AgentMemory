@@ -178,7 +178,7 @@ def evaluate_policy(
     lexical_index,
     top_n: int,
     top_k: int,
-    candidate_mode: str = "coarse",
+    candidate_mode: str = "union",
     consistency_pass: bool = True,
     fixed_channel_weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
@@ -332,6 +332,10 @@ def main() -> None:
     memory_path, eval_path, cache_path, memory_cache_path = resolve_dataset_paths(args.dataset)
     if not memory_path.exists() or not eval_path.exists():
         raise FileNotFoundError(f"缺少数据集文件: {memory_path.name} / {eval_path.name}")
+
+    if args.no_lexical and args.candidate_mode != "coarse":
+        print("[warn] --no-lexical 已开启，candidate_mode 自动切换为 coarse")
+        args.candidate_mode = "coarse"
 
     if args.rebuild_cache:
         if cache_path.exists():

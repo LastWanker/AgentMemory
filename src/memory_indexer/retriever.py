@@ -275,7 +275,7 @@ class Retriever:
         q: Query,
         top_n: int = 1000,
         top_k: int = 10,
-        candidate_mode: str = "coarse",
+        candidate_mode: str = "union",
     ) -> List[RetrieveResult]:
         if q.coarse_vec is None or q.q_vecs is None:
             raise ValueError("查询向量尚未构建")
