@@ -5,7 +5,7 @@ from .encoder.base import Encoder
 from .encoder.simple import SimpleHashEncoder
 from .vectorizer import Vectorizer
 from .index import CoarseIndex, LexicalIndex
-from .scorer import FieldScorer
+from .scorer import FieldScorer, LearnedFieldScorer, TinyReranker, compute_sim_matrix
 from .store import MemoryStore
 from .retriever import Retriever, Router
 from .pipeline import build_memory_index, retrieve_top_k
@@ -26,6 +26,9 @@ __all__ = [
     "CoarseIndex",
     "LexicalIndex",
     "FieldScorer",
+    "compute_sim_matrix",
+    "TinyReranker",
+    "LearnedFieldScorer",
     "MemoryStore",
     "Retriever",
     "Router",

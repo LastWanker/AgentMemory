@@ -180,7 +180,7 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 data/eval_cache.jsonl
-data/memory_cache_normal.jsonl
-data/memory_cache_normal.jsonl
-data/eval_cache_normal.jsonl
-/data/临时存储运行结果
+data/VectorCache/memory_cache_normal.jsonl
+data/VectorCache/memory_cache_normal.jsonl
+data/VectorCache/eval_cache_normal.jsonl
+/data/TempLog

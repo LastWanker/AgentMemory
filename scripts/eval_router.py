@@ -21,25 +21,36 @@ from src.memory_indexer import (
     Router,
     Retriever,
     FieldScorer,
+    LearnedFieldScorer,
+    SimpleHashEncoder,
     Vectorizer,
     build_memory_items,
     build_memory_index,
     set_trace,
 )
-from src.memory_indexer.encoder.hf_sentence import HFSentenceEncoder
-from src.memory_indexer.encoder.e5_token import E5TokenEncoder
 from src.memory_indexer.utils import normalize
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+MEMORY_EVAL_DIR = DATA_DIR / "Memory_Eval"
+VECTOR_CACHE_DIR = DATA_DIR / "VectorCache"
+MODEL_WEIGHTS_DIR = DATA_DIR / "ModelWeights"
 
 
 def resolve_dataset_paths(dataset: str) -> Tuple[Path, Path, Path, Path]:
     """根据数据集名称解析路径，默认采用 normal。"""
 
-    memory_path = DATA_DIR / f"memory_{dataset}.jsonl"
-    eval_path = DATA_DIR / f"eval_{dataset}.jsonl"
-    cache_path = DATA_DIR / f"eval_cache_{dataset}.jsonl"
-    memory_cache_path = DATA_DIR / f"memory_cache_{dataset}.jsonl"
+    memory_path = MEMORY_EVAL_DIR / f"memory_{dataset}.jsonl"
+    eval_path = MEMORY_EVAL_DIR / f"eval_{dataset}.jsonl"
+    cache_path = VECTOR_CACHE_DIR / f"eval_cache_{dataset}.jsonl"
+    memory_cache_path = VECTOR_CACHE_DIR / f"memory_cache_{dataset}.jsonl"
+    if not memory_path.exists():
+        memory_path = DATA_DIR / f"memory_{dataset}.jsonl"
+    if not eval_path.exists():
+        eval_path = DATA_DIR / f"eval_{dataset}.jsonl"
+    if not cache_path.parent.exists():
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+    if not memory_cache_path.parent.exists():
+        memory_cache_path.parent.mkdir(parents=True, exist_ok=True)
     return memory_path, eval_path, cache_path, memory_cache_path
 
 
@@ -181,6 +192,8 @@ def evaluate_policy(
     candidate_mode: str = "union",
     consistency_pass: bool = True,
     fixed_channel_weights: Optional[Dict[str, float]] = None,
+    use_learned_scorer: bool = False,
+    reranker_path: Optional[str] = None,
 ) -> Dict[str, float]:
     """评估单个路由策略，返回平均指标。"""
 
@@ -199,10 +212,16 @@ def evaluate_policy(
         "coarse_lexical_jaccard": 0.0,
     }
 
+    scorer = FieldScorer()
+    if use_learned_scorer:
+        if not reranker_path:
+            raise ValueError("启用 learned scorer 时必须提供 --reranker-path")
+        scorer = LearnedFieldScorer(reranker_path=reranker_path)
+
     retriever = Retriever(
         store,
         index,
-        FieldScorer(),
+        scorer,
         router=router,
         lexical_index=lexical_index,
     )
@@ -247,8 +266,8 @@ def main() -> None:
     parser.add_argument(
         "--top-n",
         type=int,
-        default=50,
-        help="粗召回数量 top_n (default: 50)",
+        default=20,
+        help="粗召回数量 top_n (default: 20)",
     )
     parser.add_argument(
         "--top-k",
@@ -304,6 +323,22 @@ def main() -> None:
     hf_group.add_argument("--hf-offline", action="store_true", help="强制 HF 离线加载")
     hf_group.add_argument("--hf-online", action="store_true", help="强制 HF 在线加载")
     hf_group.add_argument("--hf-local-only", action="store_true", help="仅使用本地 HF 模型缓存")
+    parser.add_argument(
+        "--encoder-backend",
+        choices=("hf", "simple"),
+        default="hf",
+        help="编码器后端：hf(默认) 或 simple（用于快速回归）",
+    )
+    parser.add_argument(
+        "--use-learned-scorer",
+        action="store_true",
+        help="启用 TinyReranker learned semantic scorer",
+    )
+    parser.add_argument(
+        "--reranker-path",
+        default=str(MODEL_WEIGHTS_DIR / "tiny_reranker.pt"),
+        help="learned scorer 权重路径 (.pt)",
+    )
     args = parser.parse_args()
 
     if args.trace:
@@ -348,11 +383,24 @@ def main() -> None:
     items = load_memory_items(memory_path)
     queries = load_eval_queries(eval_path)
 
-    sentence_encoder = HFSentenceEncoder(
-        model_name="intfloat/multilingual-e5-small", tokenizer="jieba"
-    )
-    token_encoder = E5TokenEncoder(model_name="intfloat/multilingual-e5-small")
+    if args.encoder_backend == "simple":
+        sentence_encoder = SimpleHashEncoder(dims=64)
+        token_encoder = sentence_encoder
+    else:
+        from src.memory_indexer.encoder.hf_sentence import HFSentenceEncoder
+        from src.memory_indexer.encoder.e5_token import E5TokenEncoder
+
+        sentence_encoder = HFSentenceEncoder(
+            model_name="intfloat/multilingual-e5-small", tokenizer="jieba"
+        )
+        token_encoder = E5TokenEncoder(model_name="intfloat/multilingual-e5-small")
     vectorizer = Vectorizer(strategy="token_pool_topk", k=8)
+    memory_cache_exists = memory_cache_path.exists()
+    if memory_cache_exists:
+        print(f"检测到缓存文件，直接读取: {memory_cache_path}")
+    else:
+        print(f"未检测到缓存文件，将构建并写入: {memory_cache_path}")
+
     if args.no_lexical:
         store, index = build_memory_index(
             items,
@@ -372,6 +420,10 @@ def main() -> None:
             cache_path=memory_cache_path,
             return_lexical=True,
         )
+
+    if not memory_cache_exists and memory_cache_path.exists():
+        print(f"已生成缓存文件: {memory_cache_path}")
+
     if cache_path.exists():
         print(f"检测到缓存文件，直接读取: {cache_path}")
     else:
@@ -432,6 +484,8 @@ def main() -> None:
                 candidate_mode=args.candidate_mode,
                 consistency_pass=not args.no_consistency_pass,
                 fixed_channel_weights=fixed_weights,
+                use_learned_scorer=args.use_learned_scorer,
+                reranker_path=args.reranker_path,
             )
             print(f"  [policy={policy}]")
             print(

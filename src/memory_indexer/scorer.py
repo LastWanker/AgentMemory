@@ -19,7 +19,6 @@ class FieldScorer:
 
         best_per_q = []
         for q in q_vecs:
-            # 选出与当前 q 最相似的 m
             best = max(dot(q, m) for m in m_vecs)
             best_per_q.append(best)
 
@@ -28,3 +27,29 @@ class FieldScorer:
         score = sum(top_used) / len(top_used) if top_used else 0.0
         debug = {"best_per_q": best_per_q, "top_used": top_used}
         return score, debug
+
+
+def compute_sim_matrix(q_vecs: List[Vector], m_vecs: List[Vector]):
+    """延迟导入 PyTorch 的 learned scorer 入口。"""
+
+    from .learned_scorer import compute_sim_matrix as _compute_sim_matrix
+
+    return _compute_sim_matrix(q_vecs, m_vecs)
+
+
+class TinyReranker:
+    """延迟构造真正的 TinyReranker(nn.Module)。"""
+
+    def __new__(cls, *args, **kwargs):
+        from .learned_scorer import TinyReranker as _TinyReranker
+
+        return _TinyReranker(*args, **kwargs)
+
+
+class LearnedFieldScorer:
+    """延迟构造真正的 LearnedFieldScorer。"""
+
+    def __new__(cls, *args, **kwargs):
+        from .learned_scorer import LearnedFieldScorer as _LearnedFieldScorer
+
+        return _LearnedFieldScorer(*args, **kwargs)

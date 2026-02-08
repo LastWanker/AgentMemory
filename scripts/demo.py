@@ -1,5 +1,7 @@
 """小型演示：用最简编码器跑一次检索。"""
 
+import argparse
+
 from src.memory_indexer import (
     Router,
     SimpleHashEncoder,
@@ -12,9 +14,13 @@ from src.memory_indexer import (
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="demo 检索")
+    parser.add_argument("--use-learned-scorer", action="store_true", help="启用 learned scorer")
+    parser.add_argument("--reranker-path", default="data/ModelWeights/tiny_reranker.pt", help="learned scorer 权重路径")
+    args = parser.parse_args()
+
     # 演示默认开启输出，可用 set_trace(False) 或 MEMORY_INDEXER_TRACE=0 关闭
     set_trace(True)
-    # 准备几条记忆（入口统一做切块与来源标记）
     payloads = [
         {"mem_id": "1", "text": "今天下雨了，我带了伞。", "source": "chat", "tags": ["daily"]},
         {"mem_id": "2", "text": "朋友说想喝咖啡，顺路带了拿铁。", "source": "chat", "tags": ["social"]},
@@ -24,7 +30,6 @@ def main() -> None:
     ]
     items = build_memory_items(payloads)
 
-    # 仍是 SimpleHashEncoder（非语义模型），可替换分词器后再做评估
     encoder = SimpleHashEncoder(dims=8)
     vectorizer = Vectorizer(strategy="token_pool_topk", k=8)
 
@@ -41,6 +46,9 @@ def main() -> None:
         top_n=5,
         top_k=5,
         router=router,
+        use_learned_scorer=args.use_learned_scorer,
+        reranker_path=args.reranker_path,
+        candidate_mode="coarse",
     )
 
     print("查询:", query)

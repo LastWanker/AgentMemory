@@ -11,7 +11,7 @@ from .encoder.base import Encoder
 from .models import EmbeddingRecord, MemoryItem, Query, RetrieveResult
 from .index import CoarseIndex, LexicalIndex
 from .retriever import Retriever, Router
-from .scorer import FieldScorer
+from .scorer import FieldScorer, LearnedFieldScorer
 from .store import MemoryStore
 from .utils import normalize
 from .vectorizer import Vectorizer
@@ -239,6 +239,8 @@ def retrieve_top_k(
     token_encoder: Optional[Encoder] = None,
     lex_tokenizer: TokenizerInput = None,
     candidate_mode: str = "union",
+    use_learned_scorer: bool = False,
+    reranker_path: Optional[str] = None,
 ) -> List[RetrieveResult]:
     """执行检索，并返回 top-k 结果。"""
 
@@ -273,10 +275,16 @@ def retrieve_top_k(
     # 【关键修复】检索流程必须走 Retriever.retrieve()，否则 router 只是“装上方向盘”。
     # - Retriever 内部会统一处理粗召回、精排、路由与 route_output 填充。
     # - pipeline 只负责构建 Query 并委托检索，避免重复一遍粗召回/精排逻辑。
+    scorer = FieldScorer()
+    if use_learned_scorer:
+        if not reranker_path:
+            raise ValueError("use_learned_scorer=True 时必须提供 reranker_path")
+        scorer = LearnedFieldScorer(reranker_path=reranker_path)
+
     retriever = Retriever(
         store,
         index,
-        FieldScorer(),
+        scorer,
         router=router,
         lexical_index=lexical_index,
     )
