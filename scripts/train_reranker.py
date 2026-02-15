@@ -211,6 +211,8 @@ def main() -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     pair_buffer: List[Tuple[torch.Tensor, torch.Tensor]] = []
+    pos_pair_count = 0
+    neg_pair_count = 0
     for query_text, expected_ids in eval_queries:
         q = encode_query(query_text, sentence_encoder, token_encoder, vectorizer)
         results = retriever.retrieve(
@@ -232,13 +234,20 @@ def main() -> None:
                 p_mat = compute_sim_matrix(q.q_vecs or [], store.embs[p].vecs)
                 n_mat = compute_sim_matrix(q.q_vecs or [], store.embs[n].vecs)
                 pair_buffer.append((p_mat, n_mat))
+                pos_pair_count += 1
+                neg_pair_count += 1
 
     if not pair_buffer:
         raise RuntimeError("没有构造出训练样本，请检查数据集、候选参数或编码器设置。")
 
+    label_mean = (pos_pair_count / (pos_pair_count + neg_pair_count)) if (pos_pair_count + neg_pair_count) else 0.0
     print(
         f"[train] dataset={args.dataset} backend={args.encoder_backend} "
         f"queries={len(eval_queries)} total_pairs={len(pair_buffer)}"
+    )
+    print(
+        f"[train] pos_pairs={pos_pair_count} neg_pairs={neg_pair_count} "
+        f"label_mean={label_mean:.4f}"
     )
     print(f"[train] epochs={args.epochs} batch_size={args.batch_size} lr={args.lr}")
     for epoch in range(1, args.epochs + 1):

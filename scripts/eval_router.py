@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
@@ -194,6 +195,10 @@ def evaluate_policy(
     fixed_channel_weights: Optional[Dict[str, float]] = None,
     use_learned_scorer: bool = False,
     reranker_path: Optional[str] = None,
+    ablation_name: str = "baseline",
+    debug_score_flat: bool = False,
+    debug_max_queries: int = 5,
+    debug_topm: int = 10,
 ) -> Dict[str, float]:
     """评估单个路由策略，返回平均指标。"""
 
@@ -225,6 +230,15 @@ def evaluate_policy(
         router=router,
         lexical_index=lexical_index,
     )
+
+    def summarize_scores(values: List[float]) -> Tuple[float, float]:
+        if not values:
+            return 0.0, 0.0
+        mean_value = sum(values) / len(values)
+        std_value = math.sqrt(sum((value - mean_value) ** 2 for value in values) / len(values))
+        return max(values) - min(values), std_value
+
+    debug_printed = 0
     for query, expected_mem_ids in cached_queries:
         count += 1
         # 第一次跑：用于触发路由缓存，准备一致性对比。
@@ -242,6 +256,47 @@ def evaluate_policy(
         if route_output:
             for key in metric_sums:
                 metric_sums[key] += route_output.metrics.get(key, 0.0)
+
+            if (
+                debug_score_flat
+                and ablation_name == "S-only"
+                and debug_printed < max(0, debug_max_queries)
+            ):
+                topm = max(1, debug_topm)
+                ranked_results = sorted(
+                    results,
+                    key=lambda item: route_output.scores.get(item.mem_id, item.score),
+                    reverse=True,
+                )
+                top_results = ranked_results[:topm]
+                top_semantic_scores = [float(item.features.get("semantic_score", 0.0)) for item in top_results]
+                top_combined_scores = [float(route_output.scores.get(item.mem_id, item.score)) for item in top_results]
+                top_final_scores = [float(item.score) for item in top_results]
+
+                semantic_range, semantic_std = summarize_scores(top_semantic_scores)
+                combined_range, combined_std = summarize_scores(top_combined_scores)
+                final_range, final_std = summarize_scores(top_final_scores)
+
+                query_id_or_prefix = query.query_id if query.query_id else query.text[:30]
+                print(
+                    "[debug-score-flat] "
+                    f"query={query_id_or_prefix} | "
+                    f"ablation={ablation_name} | "
+                    f"policy={policy}"
+                )
+                print(
+                    f"  top{topm}_semantic={','.join(f'{value:.4f}' for value in top_semantic_scores)}"
+                    f" | max-min={semantic_range:.4f} | std={semantic_std:.4f}"
+                )
+                print(
+                    f"  top{topm}_combined={','.join(f'{value:.4f}' for value in top_combined_scores)}"
+                    f" | max-min={combined_range:.4f} | std={combined_std:.4f}"
+                )
+                print(
+                    f"  top{topm}_final={','.join(f'{value:.4f}' for value in top_final_scores)}"
+                    f" | max-min={final_range:.4f} | std={final_std:.4f}"
+                )
+                debug_printed += 1
 
     count = max(1, count)
     averages = {
@@ -338,6 +393,23 @@ def main() -> None:
         "--reranker-path",
         default=str(MODEL_WEIGHTS_DIR / "tiny_reranker.pt"),
         help="learned scorer 权重路径 (.pt)",
+    )
+    parser.add_argument(
+        "--debug-score-flat",
+        action="store_true",
+        help="开启分数扁平分布调试打印（仅 S-only 组生效）",
+    )
+    parser.add_argument(
+        "--debug-max-queries",
+        type=int,
+        default=5,
+        help="调试时最多打印多少个 query (default: 5)",
+    )
+    parser.add_argument(
+        "--debug-topm",
+        type=int,
+        default=10,
+        help="调试时每个 query 打印多少个 top combined score (default: 10)",
     )
     args = parser.parse_args()
 
@@ -486,6 +558,10 @@ def main() -> None:
                 fixed_channel_weights=fixed_weights,
                 use_learned_scorer=args.use_learned_scorer,
                 reranker_path=args.reranker_path,
+                ablation_name=group_name,
+                debug_score_flat=args.debug_score_flat,
+                debug_max_queries=args.debug_max_queries,
+                debug_topm=args.debug_topm,
             )
             print(f"  [policy={policy}]")
             print(
