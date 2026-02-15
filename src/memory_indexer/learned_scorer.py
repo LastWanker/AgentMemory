@@ -76,6 +76,12 @@ class LearnedFieldScorer:
             sim_matrix = compute_sim_matrix(q_vecs, m_vecs).to(self.device)
             raw_score = self.model(sim_matrix.unsqueeze(0)).item()
 
-        score = float(torch.sigmoid(torch.tensor(raw_score)).item())
-        debug = {"raw_score": [raw_score], "sigmoid_score": [score]}
-        return score, debug
+        sigmoid_score = float(torch.sigmoid(torch.tensor(raw_score)).item())
+        # 关键修复：推理主链路直接使用 raw score，避免 sigmoid 饱和把分差压扁。
+        semantic_score = float(raw_score) / 50.0
+        debug = {
+            "raw_score": [raw_score],
+            "sigmoid_score": [sigmoid_score],
+            "semantic_score": [semantic_score],
+        }
+        return semantic_score, debug

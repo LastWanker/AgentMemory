@@ -290,20 +290,20 @@ def evaluate_policy(
                     f"policy={policy}"
                 )
                 print(
-                    f"  top{topm}_semantic={','.join(f'{value:.4f}' for value in top_semantic_scores)}"
-                    f" | max-min={semantic_range:.4f} | std={semantic_std:.4f}"
+                    f"  top{topm}_semantic={','.join(f'{value:.6f}' for value in top_semantic_scores)}"
+                    f" | max-min={semantic_range:.6f} | std={semantic_std:.6f}"
                 )
                 print(
-                    f"  top{topm}_combined={','.join(f'{value:.4f}' for value in top_combined_scores)}"
-                    f" | max-min={combined_range:.4f} | std={combined_std:.4f}"
+                    f"  top{topm}_combined={','.join(f'{value:.6f}' for value in top_combined_scores)}"
+                    f" | max-min={combined_range:.6f} | std={combined_std:.6f}"
                 )
                 print(
-                    f"  top{topm}_final={','.join(f'{value:.4f}' for value in top_final_scores)}"
-                    f" | max-min={final_range:.4f} | std={final_std:.4f}"
+                    f"  top{topm}_final={','.join(f'{value:.6f}' for value in top_final_scores)}"
+                    f" | max-min={final_range:.6f} | std={final_std:.6f}"
                 )
                 print(
-                    f"  top{topm}_raw={','.join(f'{value:.4f}' for value in top_raw_scores)}"
-                    f" | max-min={raw_range:.4f} | std={raw_std:.4f}"
+                    f"  top{topm}_raw={','.join(f'{value:.6f}' for value in top_raw_scores)}"
+                    f" | max-min={raw_range:.6f} | std={raw_std:.6f}"
                 )
                 debug_printed += 1
 
