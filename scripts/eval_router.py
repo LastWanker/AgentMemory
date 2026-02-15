@@ -272,10 +272,15 @@ def evaluate_policy(
                 top_semantic_scores = [float(item.features.get("semantic_score", 0.0)) for item in top_results]
                 top_combined_scores = [float(route_output.scores.get(item.mem_id, item.score)) for item in top_results]
                 top_final_scores = [float(item.score) for item in top_results]
+                top_raw_scores = [
+                    float((item.debug.get("raw_score", [0.0]) if item.debug else [0.0])[0])
+                    for item in top_results
+                ]
 
                 semantic_range, semantic_std = summarize_scores(top_semantic_scores)
                 combined_range, combined_std = summarize_scores(top_combined_scores)
                 final_range, final_std = summarize_scores(top_final_scores)
+                raw_range, raw_std = summarize_scores(top_raw_scores)
 
                 query_id_or_prefix = query.query_id if query.query_id else query.text[:30]
                 print(
@@ -295,6 +300,10 @@ def evaluate_policy(
                 print(
                     f"  top{topm}_final={','.join(f'{value:.4f}' for value in top_final_scores)}"
                     f" | max-min={final_range:.4f} | std={final_std:.4f}"
+                )
+                print(
+                    f"  top{topm}_raw={','.join(f'{value:.4f}' for value in top_raw_scores)}"
+                    f" | max-min={raw_range:.4f} | std={raw_std:.4f}"
                 )
                 debug_printed += 1
 
