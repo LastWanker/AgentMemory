@@ -12,7 +12,7 @@ import time
 from sentence_transformers import SentenceTransformer
 
 from .base import Encoder
-from ..tokenizers import Tokenizer, TokenizerInput, resolve_tokenizer
+from ..text_tokenizers import Tokenizer, TokenizerInput, resolve_tokenizer
 from ..utils import Vector
 
 
@@ -20,6 +20,7 @@ class HFSentenceEncoder(Encoder):
     """句向量编码器：先替换 coarse_vec，让系统更具语义能力。"""
 
     _cuda_logged = False
+    _token_placeholder_warned = False
 
     def __init__(
         self,
@@ -109,7 +110,9 @@ class HFSentenceEncoder(Encoder):
 
     def _maybe_prefix(self, text: str, *, is_query: bool) -> str:
         # coarse 角色必须显式区分 query / passage，避免混用导致召回偏移。
-        return ("query: " if is_query else "passage: ") + text
+        if self.use_e5_prefix and "e5" in self.model_name.lower():
+            return ("query: " if is_query else "passage: ") + text
+        return text
 
     def _encode_with_role(self, text: str, *, is_query: bool) -> Vector:
         payload = self._maybe_prefix(text, is_query=is_query)
@@ -140,6 +143,15 @@ class HFSentenceEncoder(Encoder):
         tokens = self.tokenizer.tokenize(text)
         if not tokens:
             return [], []
+        if (
+            os.getenv("MEMORY_TRACE", "0") == "1"
+            and not HFSentenceEncoder._token_placeholder_warned
+        ):
+            HFSentenceEncoder._token_placeholder_warned = True
+            print(
+                "[warn] HFSentenceEncoder.encode_tokens() returns placeholder token vectors; "
+                "for formal experiments pass E5TokenEncoder as token_encoder."
+            )
         placeholder_vec = self.model.encode(
             self._maybe_prefix(text, is_query=True),
             normalize_embeddings=True,

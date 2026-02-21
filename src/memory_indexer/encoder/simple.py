@@ -9,7 +9,7 @@ from typing import List, Tuple
 
 from .base import Encoder
 from ..utils import Vector, mean, normalize, stable_hash
-from ..tokenizers import Tokenizer, TokenizerInput, resolve_tokenizer
+from ..text_tokenizers import Tokenizer, TokenizerInput, resolve_tokenizer
 
 
 class SimpleHashEncoder(Encoder):

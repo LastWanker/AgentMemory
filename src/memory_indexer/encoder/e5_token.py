@@ -85,7 +85,11 @@ class E5TokenEncoder(Encoder):
 
         if not text.strip():
             return [], []
-        payload = self._maybe_prefix(text, is_query=True)
+        lowered = text.strip().lower()
+        if lowered.startswith("query:") or lowered.startswith("passage:"):
+            payload = text
+        else:
+            payload = self._maybe_prefix(text, is_query=True)
         inputs = self.tokenizer(
             payload,
             return_tensors="pt",

@@ -2,6 +2,68 @@
 
 > 目标：把当前文本转成“检索指令”（索引场/向量组），从记忆库中唤醒可能有用的片段（Top-k）。
 
+## 当前总纲（简版，2026-02-20）
+
+以下条目优先级高于历史讨论中的细节分歧，用于后续实现对齐：
+
+1. 提取用户发言  
+   只把用户侧内容作为主资产。assistant 内容默认不进入训练主语料（可作为弱参考）。
+
+2. 清洗明显复制粘贴的大段内容  
+   先用规则法，优先剔除长代码块、超长模板文本、重复粘贴段。
+
+3. 保持原始顺序  
+   所有样本必须保留会话内时间顺序（session 内严格按 turn 排序）。
+
+4. 进行“话题隔断”  
+   以会话窗口（chat/session）为基础，再用句向量相似度补充切分。  
+   当前建议阈值（后续可调）：相邻 user turn 相似度 < 0.35 且出现明显新关键词时，标记为断裂候选。
+
+5. 同一事件归为一个“聚集”  
+   同一聚集内样本互为候选正例；每条都可单独作为 query。  
+   未来训练要加入 query 改写增强（同义改写/口语改写/省略改写）以提升稳定性。
+
+6. 先规则打底，再逐步升级  
+   先完成可复用抽取与清洗管道，再考虑 LLM 摘要与更复杂主题切分。
+
+### 本阶段最小产物（建议）
+- `data/Processed/user_turns_raw.jsonl`：高召回原始用户语料（保序、仅基础清洗）。
+- `data/Processed/user_turns_dedup.jsonl`：去重/归一后语料（用于后续聚集与训练）。
+
+### 最小字段建议
+- `session_id`
+- `turn_id`
+- `role`
+- `text`
+- `timestamp`
+- `user_message_clean`
+- `topic_break_flag`
+- `cluster_id`
+- `candidate_pool_ids`
+
+### 实现备注（请保留在代码注释中）
+- 同一 cluster 内样本互为正例/候选正例。
+- 任一条样本都可作为 query 发起检索或训练样本生成。
+- 训练前应做 query 多表达增强，目标是鲁棒召回而非单句拟合。
+
+### 架构放置建议（已执行）
+- 保持 `src/memory_indexer/` 不动：继续专注检索/路由/打分。
+- 新增并列包 `src/chat_memory_processor/`：专注聊天数据抽取、清洗、话题隔断、聚集。
+- 这样分层后，脚本职责清晰：
+  - 检索评测训练脚本仍走 `memory_indexer`
+  - 聊天预处理脚本走 `chat_memory_processor`
+
+### 预处理脚本（最小可用）
+```bash
+python scripts/chat_memory/build_user_turns.py \
+  --input data/RawDeepseekChats/conversations.json \
+  --sim-threshold 0.35
+```
+
+默认输出：
+- `data/Processed/user_turns_raw.jsonl`
+- `data/Processed/user_turns_dedup.jsonl`
+
 ## 1. 目标与边界（必须写死）
 
 ### 我在做什么
@@ -284,3 +346,60 @@ MVP 先固定窗口：
 先用现成模型把“向量组记忆 + 向量组查询 + 粗召回 + 精排”跑通；跑通之后，我就有了一个能承载改进的骨架。自监督训练、硬负样本、个性化插件，全都能在这个骨架上逐步加，不会变成空谈。  
 
 如果我愿意更“工程化”一点，我下一步会把 MVP 的接口设计也写出来：索引文件格式、每条记忆字段、检索日志输出的可解释信息，以及最小测试用例的组织方式。  
+
+---
+
+## Followup 主线（listwise 专用）
+
+下面三条是“从零到跑通”的推荐命令（追加说明，不影响旧流程）：
+
+1. 生成 followup processed eval：
+
+```bash
+python -m scripts.generate_training_samples --log-path <your_log.jsonl> --export-eval --out data/Processed/eval_followup.jsonl
+```
+
+2. 训练 listwise 模型（HF/E5）：
+
+```bash
+python -m scripts.train_reranker --dataset followup --encoder-backend hf --loss-type listwise --neg-strategy ranked --run-dir runs/<timestamp_train>
+```
+
+3. 跑 pairwise vs listwise 对照消融（HF/E5）：
+
+```bash
+python -m scripts.run_ablation_matrix --dataset followup --encoder-backend hf --configs pairwise_ranked,listwise_ranked --seeds 11 --bootstrap 200
+```
+
+补充：
+- `followup` 数据集会优先从 `data/Processed/` 读取（`memory_followup.jsonl`、`eval_followup.jsonl`）。
+- `VectorCache` 使用签名隔离，切换 dataset/backend/encoder/strategy 不会复用错缓存。
+- `runs/<timestamp>/` 下会有日志、metrics、summary、config snapshot；训练权重会在 runs 下保留，同时可复制到 `data/ModelWeights/`。
+
+## Run-dir / Registry / Cache (Recommended)
+This is an additive section. Old commands still work.
+
+1. List recent runs (from `runs/registry.csv`):
+```bash
+python -m scripts.list_runs --dataset followup --encoder-backend hf
+```
+
+2. Select best run by metric and materialize under `runs/best/...`:
+```bash
+python -m scripts.select_best_run --dataset followup --encoder-backend hf --metric Recall@5
+```
+
+3. Reproduce eval with selected best weight:
+```bash
+python -m scripts.eval_router --dataset followup --encoder-backend hf --use-learned-scorer --reranker-path runs/best/followup/hf/tiny_reranker.pt --run-dir runs/<timestamp_eval_best>
+```
+
+4. Cache cleanup (selective, by signature):
+```bash
+python -m scripts.clean_cache --dataset followup --encoder-backend hf --dry-run
+python -m scripts.clean_cache --dataset followup --encoder-backend hf
+```
+
+Notes:
+- Cache signature now includes dataset/backend/encoder/strategy and source data fingerprint (memory+eval file SHA1 short hash). If source files change, cache will auto rebuild.
+- With `train_reranker --run-dir`, weights are saved to run-dir by default and will not overwrite `data/ModelWeights/tiny_reranker.pt` unless you pass `--save-path` or `--export-weights-to`.

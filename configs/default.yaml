@@ -1,0 +1,25 @@
+{
+  "common": {
+    "dataset": "normal",
+    "top_n": 20,
+    "top_k": 5,
+    "candidate_mode": "union",
+    "encoder_backend": "hf"
+  },
+  "eval_router": {
+    "policies": "soft,half_hard,hard",
+    "bootstrap": 0
+  },
+  "train_reranker": {
+    "epochs": 10,
+    "batch_size": 16,
+    "lr": 0.001,
+    "device": "cuda",
+    "loss_type": "pairwise",
+    "neg_strategy": "random"
+  },
+  "ablation_matrix": {
+    "policies": "soft",
+    "ablation": "baseline"
+  }
+}

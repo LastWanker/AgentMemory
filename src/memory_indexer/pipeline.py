@@ -16,7 +16,7 @@ from .store import MemoryStore
 from .utils import normalize
 from .vectorizer import Vectorizer
 from .trace import trace, trace_progress
-from .tokenizers import TokenizerInput, resolve_tokenizer
+from .text_tokenizers import TokenizerInput, resolve_tokenizer
 
 COARSE_ROLE_QUERY = "query"
 COARSE_ROLE_PASSAGE = "passage"
@@ -44,19 +44,35 @@ def _load_memory_cache(
     cache_path: Optional[Path],
     encoder_id: str,
     strategy: str,
+    cache_signature: Optional[str] = None,
 ) -> Dict[str, Dict[str, object]]:
     if not cache_path or not cache_path.exists():
         return {}
     payloads: Dict[str, Dict[str, object]] = {}
+    signature_checked = False
     for line in cache_path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         payload = json.loads(line)
+        if isinstance(payload, dict) and "_meta" in payload:
+            meta = payload.get("_meta") or {}
+            stored_signature = meta.get("cache_signature")
+            if cache_signature and stored_signature != cache_signature:
+                trace(
+                    f"记忆缓存签名不匹配，忽略旧缓存: {cache_path} | "
+                    f"expected={cache_signature} got={stored_signature}"
+                )
+                return {}
+            signature_checked = True
+            continue
         if payload.get("encoder_id") != encoder_id or payload.get("strategy") != strategy:
             continue
         mem_id = payload.get("mem_id")
         if isinstance(mem_id, str):
             payloads[mem_id] = payload
+    if cache_signature and not signature_checked:
+        trace(f"记忆缓存缺少签名头，触发重建: {cache_path}")
+        return {}
     if payloads:
         trace(f"检测到记忆缓存: {cache_path} | entries={len(payloads)}")
     return payloads
@@ -97,8 +113,17 @@ def _write_memory_cache(
     cache_path: Path,
     items: List[MemoryItem],
     cached_payloads: Dict[str, Dict[str, object]],
+    cache_signature: Optional[str] = None,
 ) -> None:
     with cache_path.open("w", encoding="utf-8") as handle:
+        if cache_signature:
+            handle.write(
+                json.dumps(
+                    {"_meta": {"cache_signature": cache_signature}},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
         for item in items:
             payload = cached_payloads.get(item.mem_id)
             if not payload:
@@ -114,6 +139,7 @@ def build_memory_index(
     token_encoder: Optional[Encoder] = None,
     lex_tokenizer: TokenizerInput = None,
     cache_path: Optional[Path] = None,
+    cache_signature: Optional[str] = None,
     return_lexical: bool = False,
 ) -> Tuple[MemoryStore, CoarseIndex] | Tuple[MemoryStore, CoarseIndex, LexicalIndex]:
     """构建记忆库索引。
@@ -130,7 +156,12 @@ def build_memory_index(
     index = CoarseIndex()
     lexical_index = LexicalIndex() if return_lexical else None
     encoder_id = _compose_encoder_id(sentence_encoder, token_encoder)
-    cached_payloads = _load_memory_cache(cache_path, encoder_id, vectorizer.strategy)
+    cached_payloads = _load_memory_cache(
+        cache_path,
+        encoder_id,
+        vectorizer.strategy,
+        cache_signature=cache_signature,
+    )
     cache_hits = 0
     cache_misses = 0
 
@@ -216,7 +247,12 @@ def build_memory_index(
 
     progress.finish()
     if cache_path:
-        _write_memory_cache(cache_path, items, cached_payloads)
+        _write_memory_cache(
+            cache_path,
+            items,
+            cached_payloads,
+            cache_signature=cache_signature,
+        )
         trace(
             f"记忆缓存更新完成: {cache_path} | hit={cache_hits} | miss={cache_misses}"
         )

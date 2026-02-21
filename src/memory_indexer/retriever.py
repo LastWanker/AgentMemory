@@ -8,7 +8,7 @@ import time
 
 from .index import CoarseIndex, LexicalIndex
 from .models import Query, RetrieveResult, RouteOutput
-from .scorer import FieldScorer
+from .scorer import FieldScorer, LearnedFieldScorer
 from .store import MemoryStore
 
 
@@ -262,6 +262,8 @@ class Retriever:
         router: Optional[Router] = None,
         lexical_index: Optional[LexicalIndex] = None,
         recency_half_life_days: float = 7.0,
+        use_khat: bool = False,
+        khat_min: int = 1,
     ) -> None:
         self.store = store
         self.index = index
@@ -269,6 +271,8 @@ class Retriever:
         self.router = router or Router()
         self.lexical_index = lexical_index
         self.recency_half_life_days = recency_half_life_days
+        self.use_khat = use_khat
+        self.khat_min = max(0, khat_min)
 
     def retrieve(
         self,
@@ -352,7 +356,17 @@ class Retriever:
             )
 
         results.sort(key=lambda r: r.score, reverse=True)
-        return results[:top_k]
+        final_k = top_k
+        if self.use_khat and isinstance(self.scorer, LearnedFieldScorer):
+            query_features = [
+                math.log1p(len((q.aux or {}).get("lex_tokens", []) or q.text.split() or ["_"])),
+                math.log1p(len(q.text or "")),
+                math.log1p(max(1, len(results))),
+            ]
+            k_hat = self.scorer.predict_cardinality(query_features)
+            if k_hat is not None:
+                final_k = min(top_k, max(self.khat_min, int(k_hat)))
+        return results[:final_k]
 
     def _build_candidates(
         self,

@@ -10,7 +10,7 @@ from .store import MemoryStore
 from .retriever import Retriever, Router
 from .pipeline import build_memory_index, retrieve_top_k
 from .ingest import build_memory_items
-from .tokenizers import Tokenizer, tokenize
+from .text_tokenizers import Tokenizer, tokenize
 from .trace import set_trace, trace
 
 __all__ = [

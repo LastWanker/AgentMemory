@@ -2,6 +2,72 @@
 
 > 目标：把当前文本转成“检索指令”（索引场/向量组），从记忆库中唤醒可能有用的片段（Top-k）。
 
+## 当前总纲（简版，2026-02-20）
+
+以下条目优先级高于历史讨论中的细节分歧，用于后续实现对齐：
+
+1. 提取用户发言  
+   只把用户侧内容作为主资产。assistant 内容默认不进入训练主语料（可作为弱参考）。
+
+2. 清洗明显复制粘贴的大段内容  
+   先用规则法，优先剔除长代码块、超长模板文本、重复粘贴段。
+
+3. 保持原始顺序  
+   所有样本必须保留会话内时间顺序（session 内严格按 turn 排序）。
+
+4. 进行“话题隔断”  
+   以会话窗口（chat/session）为基础，再用句向量相似度补充切分。  
+   当前建议阈值（后续可调）：相邻 user turn 相似度 < 0.35 且出现明显新关键词时，标记为断裂候选。
+
+5. 同一事件归为一个“聚集”  
+   同一聚集内样本互为候选正例；每条都可单独作为 query。  
+   未来训练要加入 query 改写增强（同义改写/口语改写/省略改写）以提升稳定性。
+
+6. 先规则打底，再逐步升级  
+   先完成可复用抽取与清洗管道，再考虑 LLM 摘要与更复杂主题切分。
+
+### 本阶段最小产物（建议）
+- `data/Processed/user_turns_raw.jsonl`：高召回原始用户语料（保序、仅基础清洗）。
+- `data/Processed/user_turns_dedup.jsonl`：去重/归一后语料（用于后续聚集与训练）。
+
+### 最小字段建议
+- `session_id`
+- `turn_id`
+- `role`
+- `text`
+- `timestamp`
+- `user_message_clean`
+- `topic_break_flag`
+- `cluster_id`
+- `candidate_pool_ids`
+
+### 实现备注（请保留在代码注释中）
+- 同一 cluster 内样本互为正例/候选正例。
+- 任一条样本都可作为 query 发起检索或训练样本生成。
+- 训练前应做 query 多表达增强，目标是鲁棒召回而非单句拟合。
+
+### 架构放置建议（已执行）
+- 保持 `src/memory_indexer/` 不动：继续专注检索/路由/打分。
+- 新增并列包 `src/chat_memory_processor/`：专注聊天数据抽取、清洗、话题隔断、聚集。
+- 这样分层后，脚本职责清晰：
+  - 检索评测训练脚本仍走 `memory_indexer`
+  - 聊天预处理脚本走 `chat_memory_processor`
+
+### 预处理脚本（最小可用）
+```bash
+python scripts/chat_memory/build_user_turns.py \
+  --input data/RawDeepseekChats/conversations.json \
+  --sim-threshold 0.35
+```
+
+默认输出：
+- `data/Processed/user_turns_raw.jsonl`
+- `data/Processed/user_turns_dedup.jsonl`
+
+### 讨论方案入口
+- 话题切分、聚类、query 反推（非 LLM 优先）见：
+  - `README/话题切分与聚类方案.md`
+
 ## 1. 目标与边界（必须写死）
 
 ### 我在做什么

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 from torch import Tensor, nn
@@ -56,19 +56,48 @@ class TinyReranker(nn.Module):
         return self.mlp(features).squeeze(-1)
 
 
+class CardinalityHead(nn.Module):
+    """查询级数量预测头：输入轻量 query 特征，输出 0..Kmax 的分类 logits。"""
+
+    def __init__(self, input_dim: int = 3, hidden_dim: int = 16, k_max: int = 20) -> None:
+        super().__init__()
+        self.k_max = k_max
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, k_max + 1),
+        )
+
+    def forward(self, features: Tensor) -> Tensor:
+        if features.dim() == 1:
+            features = features.unsqueeze(0)
+        return self.mlp(features)
+
+
 class LearnedFieldScorer:
     """可学习语义打分器：用 TinyReranker 替代 rule-based semantic_score。"""
 
     def __init__(self, reranker_path: str, device: str = "cpu") -> None:
         self.device = torch.device(device)
         self.model = TinyReranker().to(self.device)
+        self.cardinality_head: Optional[CardinalityHead] = None
         try:
             state = torch.load(reranker_path, map_location=self.device, weights_only=True)
         except TypeError:
             # 兼容旧版本 PyTorch（不支持 weights_only 参数）
             state = torch.load(reranker_path, map_location=self.device)
         state_dict = state.get("model_state", state)
-        self.model.load_state_dict(state_dict)
+        self.model.load_state_dict(state_dict, strict=False)
+        cardinality_state = state.get("cardinality_state") if isinstance(state, dict) else None
+        if cardinality_state:
+            card_meta = state.get("cardinality_meta", {})
+            self.cardinality_head = CardinalityHead(
+                input_dim=int(card_meta.get("input_dim", 3)),
+                hidden_dim=int(card_meta.get("hidden_dim", 16)),
+                k_max=int(card_meta.get("k_max", 20)),
+            ).to(self.device)
+            self.cardinality_head.load_state_dict(cardinality_state)
+            self.cardinality_head.eval()
         self.model.eval()
 
     def score(self, q_vecs: List[Vector], m_vecs: List[Vector]) -> Tuple[float, Dict[str, List[float]]]:
@@ -85,3 +114,11 @@ class LearnedFieldScorer:
             "semantic_score": [semantic_score],
         }
         return semantic_score, debug
+
+    def predict_cardinality(self, query_features: List[float]) -> Optional[int]:
+        if self.cardinality_head is None:
+            return None
+        with torch.no_grad():
+            tensor = torch.tensor(query_features, dtype=torch.float32, device=self.device)
+            logits = self.cardinality_head(tensor)
+            return int(logits.argmax(dim=-1).item())
