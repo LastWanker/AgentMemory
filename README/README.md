@@ -55,9 +55,8 @@
 
 ### 预处理脚本（最小可用）
 ```bash
-python scripts/chat_memory/build_user_turns.py \
-  --input data/RawDeepseekChats/conversations.json \
-  --sim-threshold 0.35
+python scripts/memory_processer/build_chat_memory.py \
+  --config configs/chat_memory.yaml
 ```
 
 默认输出：

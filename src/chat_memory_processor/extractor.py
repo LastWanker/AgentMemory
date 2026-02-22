@@ -33,7 +33,12 @@ def _extract_from_conversation(convo: Dict[str, object], *, session_id: str) -> 
         return []
 
     rows: List[Tuple[str, str, str, str]] = []
-    for node_id, node in mapping.items():
+    ordered_nodes = _ordered_node_ids(mapping)
+    if not ordered_nodes:
+        ordered_nodes = list(mapping.keys())
+
+    for node_id in ordered_nodes:
+        node = mapping.get(node_id)
         if not isinstance(node, dict):
             continue
         message = node.get("message")
@@ -84,3 +89,29 @@ def _safe_int(value: str) -> int:
     except Exception:
         return 0
 
+
+def _ordered_node_ids(mapping: Dict[str, object]) -> List[str]:
+    root_node = mapping.get("root")
+    if not isinstance(root_node, dict):
+        return []
+
+    ordered: List[str] = []
+    queue: List[str] = ["root"]
+    seen = set(queue)
+    while queue:
+        current = queue.pop(0)
+        node = mapping.get(current)
+        if not isinstance(node, dict):
+            continue
+        if current != "root":
+            ordered.append(current)
+        children = node.get("children")
+        if not isinstance(children, list):
+            continue
+        for child in children:
+            cid = str(child)
+            if cid in seen:
+                continue
+            seen.add(cid)
+            queue.append(cid)
+    return ordered

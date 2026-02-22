@@ -185,4 +185,5 @@ data/VectorCache/memory_cache_normal.jsonl
 data/VectorCache/eval_cache_normal.jsonl
 /data/TempLog
 /data/VectorCache
+/data/_secrets
 /runs

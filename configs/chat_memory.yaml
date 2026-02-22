@@ -1,0 +1,36 @@
+input: data/RawDeepseekChats/conversations.json
+session_id: ""
+
+segmentation:
+  mode: adaptive
+  fixed_sim_threshold: 0.35
+  novelty_threshold: 0.80
+  min_segment_len: 2
+
+clustering:
+  cross_session_merge: true
+  global_merge_similarity_threshold: null
+
+query:
+  supplemental_queries: null
+  llm_supplemental_out: data/Processed/eval_chat_supplemental.jsonl
+  llm:
+    base_url: https://api.deepseek.com
+    model: deepseek-chat
+    api_key_file: data/_secrets/deepseek.env
+    concurrency: 32
+    timeout_seconds: 60
+    max_retries: 3
+    temperature: 1.1
+    top_p: 0.95
+    seed: 11
+    max_clusters: null
+    min_cluster_size: 1
+    max_per_layer: 6
+
+output:
+  raw_out: data/Processed/user_turns_raw.jsonl
+  dedup_out: data/Processed/user_turns_dedup.jsonl
+  memory_out: data/Processed/memory_chat.jsonl
+  eval_out: data/Processed/eval_chat.jsonl
+  followup_out: data/Processed/eval_chat_followup.jsonl
