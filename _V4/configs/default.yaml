@@ -1,0 +1,86 @@
+data:
+  root_dir: data/V4
+  shared_data_dir: data
+
+slots:
+  enabled: true
+  fields:
+    - raw_brief
+    - event
+    - intent
+    - entities
+    - status
+    - emotion
+    - context
+    - impact
+
+retrieval:
+  dense_top_n: 50
+  bm25_top_n: 50
+  expanded_top_n_cap: 150
+  cluster_expand_ratio: 0.5
+  cluster_expand_min_hits: 2
+
+encoder:
+  model_name: intfloat/multilingual-e5-small
+  use_e5_prefix: true
+  local_files_only: true
+  offline: true
+  device: auto
+  batch_size: 96
+  batch_size_cuda: 128
+  batch_size_cpu: 32
+
+cache:
+  dir: data/V4/VectorCacheV4
+  alias: users
+
+reranker:
+  family: slot_bipartite_8x8
+  dynamic_list: true
+  model_path: data/V4/models/slot_bipartite_reranker.pt
+  fallback_model_path: data/V4/models/reranker.pt
+  hidden_dim: 64
+  dropout: 0.1
+  input_dim: 384
+  seq_len: 8
+  proj_dim: 128
+  d_model: 256
+  num_heads: 4
+  num_layers: 3
+  tau: 0.1
+  learnable_tau: false
+  blend_alpha: 0.35
+  top_k_metrics:
+    - 1
+    - 3
+    - 5
+    - 10
+  token_fallback:
+    enabled: true
+    preselect_top_n: 32
+    final_k: 8
+    diversity_method: mmr
+
+training:
+  device: auto
+  split_seed: 11
+  train_ratio: 0.8
+  valid_ratio: 0.1
+  min_neg_per_source: 4
+  max_neg_per_source: 24
+  neg_ratio_near_miss: 0.5
+  neg_ratio_random: 0.5
+  epochs: 8
+  batch_size: 8
+  batch_size_cpu: 8
+  batch_size_cuda: 16
+  learning_rate: 0.001
+
+query:
+  reuse_current_augmentation: true
+  slots_path: data/V4/processed/query_slots.jsonl
+
+serving:
+  host: 127.0.0.1
+  port: 8891

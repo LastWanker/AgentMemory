@@ -12,13 +12,13 @@ clustering:
   global_merge_similarity_threshold: null
 
 query:
-  supplemental_queries: null
-  llm_supplemental_out: data/Processed/eval_chat_supplemental.jsonl
+  supplemental_queries: data/Processed/eval_chat_supplemental.api.jsonl
+  llm_supplemental_out: data/Processed/eval_chat_supplemental.api.jsonl
   llm:
     base_url: https://api.deepseek.com
     model: deepseek-chat
     api_key_file: data/_secrets/deepseek.env
-    concurrency: 32
+    concurrency: 8
     timeout_seconds: 60
     max_retries: 3
     temperature: 1.1

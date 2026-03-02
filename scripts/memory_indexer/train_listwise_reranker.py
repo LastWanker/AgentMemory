@@ -11,13 +11,13 @@ from pathlib import Path
 from typing import List
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_SAVE_PATH = REPO_ROOT / "data" / "ModelWeights" / "listwise_reranker.pt"
+DEFAULT_SAVE_PATH = REPO_ROOT / "data" / "ModelWeights" / "listwise_bipartite_reranker.pt"
 
 
 def backup_if_exists(path: Path) -> None:
     if not path.exists():
         return
-    backup = path.parent / f"{path.stem}.bak_{datetime.now().strftime('%Y%m%d_%H%M%S')}{path.suffix}"
+    backup = path.parent / f"{path.stem}.old_{datetime.now().strftime('%Y%m%d_%H%M%S')}{path.suffix}"
     shutil.copy2(path, backup)
     print(f"[listwise-wrapper] backup => {backup}")
 
@@ -40,12 +40,21 @@ def build_cmd(args: argparse.Namespace, passthrough: List[str], save_path: Path)
         cmd.extend(["--run-dir", args.run_dir])
     cmd.extend(passthrough)
     # Force listwise path as the last args.
-    cmd.extend(["--loss-type", "listwise", "--neg-strategy", "ranked"])
+    cmd.extend(
+        [
+            "--loss-type",
+            "listwise",
+            "--neg-strategy",
+            "ranked",
+            "--model-family",
+            "bipartite",
+        ]
+    )
     return cmd
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train listwise reranker (ranked negatives).")
+    parser = argparse.ArgumentParser(description="Train listwise reranker (default: bipartite).")
     parser.add_argument("--config", default=str(REPO_ROOT / "configs" / "default.yaml"))
     parser.add_argument("--dataset", default="followup")
     parser.add_argument("--encoder-backend", choices=("hf", "simple"), default="hf")

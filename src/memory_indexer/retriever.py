@@ -281,6 +281,7 @@ class Retriever:
         top_k: int = 10,
         candidate_mode: str = "union",
     ) -> List[RetrieveResult]:
+        retrieve_start = time.perf_counter()
         if q.coarse_vec is None or q.q_vecs is None:
             raise ValueError("查询向量尚未构建")
         assert (q.aux or {}).get("coarse_role") == "query", (
@@ -290,22 +291,42 @@ class Retriever:
         query_tokens = q.aux.get("lex_tokens") if q.aux else None
         if not query_tokens:
             query_tokens = q.aux.get("tokens", []) if q.aux else []
-        lexical_scores = self._build_lexical_scores(query_tokens, top_n=top_n)
-
-        candidates, candidate_stats = self._build_candidates(
+        candidates, candidate_stats, lexical_scores = self._build_candidates(
             q=q,
             query_tokens=query_tokens,
             top_n=top_n,
             candidate_mode=candidate_mode,
         )
 
+        scorer_start = time.perf_counter()
+        batch_semantic: Optional[List[Tuple[float, Dict[str, List[float]]]]] = None
+        scorer_score_many = getattr(self.scorer, "score_many", None)
+        if callable(scorer_score_many):
+            try:
+                candidate_mem_vecs = [self.store.embs[mem_id].vecs for mem_id, _ in candidates]
+                score_many_kwargs = {}
+                scorer_batch_size = getattr(self.scorer, "batch_size", None)
+                if isinstance(scorer_batch_size, int) and scorer_batch_size > 0:
+                    score_many_kwargs["batch_size"] = scorer_batch_size
+                batch_semantic = scorer_score_many(
+                    q.q_vecs, candidate_mem_vecs, **score_many_kwargs
+                )
+                if len(batch_semantic) != len(candidates):
+                    batch_semantic = None
+            except Exception:
+                # Keep backward compatibility by falling back to per-candidate scoring.
+                batch_semantic = None
+
         scored: List[Tuple[str, Dict[str, float], float, float, Dict[str, List[float]]]] = []
-        for mem_id, coarse_score in candidates:
+        for idx, (mem_id, coarse_score) in enumerate(candidates):
             emb = self.store.embs[mem_id]
             assert emb.aux.get("coarse_role") == "passage", (
                 "memory coarse_vec 必须来自 encode_passage_sentence"
             )
-            score, debug = self.scorer.score(q.q_vecs, emb.vecs)
+            if batch_semantic is not None:
+                score, debug = batch_semantic[idx]
+            else:
+                score, debug = self.scorer.score(q.q_vecs, emb.vecs)
             item = self.store.items[mem_id]
             doc_tokens = self.store.tokens.get(mem_id, [])
             token_overlap = self._token_overlap(query_tokens, doc_tokens)
@@ -325,14 +346,24 @@ class Retriever:
                 "meta_score": float(meta_score),
             }
             scored.append((mem_id, features, score, coarse_score, debug))
+        scorer_elapsed_s = time.perf_counter() - scorer_start
 
+        routing_start = time.perf_counter()
         route_output = self.router.route([(mem_id, features) for mem_id, features, _, _, _ in scored])
         route_output.metrics["candidate_size"] = float(candidate_stats["candidate_size"])
         route_output.explain["candidate_mode"] = [candidate_mode]
+        # Keep coarse-only ranking order for offline comparison against reranked results.
+        coarse_ranked = sorted(candidates, key=lambda pair: pair[1], reverse=True)
+        route_output.explain["coarse_ranked_ids"] = [mem_id for mem_id, _ in coarse_ranked]
         if "coarse_lexical_jaccard" in candidate_stats:
             route_output.metrics["coarse_lexical_jaccard"] = float(
                 candidate_stats["coarse_lexical_jaccard"]
             )
+        route_output.metrics["coarse_elapsed_s"] = float(candidate_stats.get("coarse_elapsed_s", 0.0))
+        route_output.metrics["lexical_elapsed_s"] = float(
+            candidate_stats.get("lexical_elapsed_s", 0.0)
+        )
+        route_output.metrics["scorer_elapsed_s"] = float(scorer_elapsed_s)
 
         results: List[RetrieveResult] = []
         for mem_id, features, score, coarse_score, debug in scored:
@@ -356,6 +387,10 @@ class Retriever:
             )
 
         results.sort(key=lambda r: r.score, reverse=True)
+        routing_elapsed_s = time.perf_counter() - routing_start
+        route_output.metrics["routing_elapsed_s"] = float(routing_elapsed_s)
+        route_output.metrics["retrieve_elapsed_s"] = float(time.perf_counter() - retrieve_start)
+
         final_k = top_k
         if self.use_khat and isinstance(self.scorer, LearnedFieldScorer):
             query_features = [
@@ -375,23 +410,43 @@ class Retriever:
         query_tokens: List[str],
         top_n: int,
         candidate_mode: str,
-    ) -> Tuple[List[Tuple[str, float]], Dict[str, float]]:
+    ) -> Tuple[List[Tuple[str, float]], Dict[str, float], Dict[str, float]]:
         if candidate_mode not in {"coarse", "lexical", "union"}:
             raise ValueError(f"未知 candidate_mode: {candidate_mode}")
 
+        coarse_start = time.perf_counter()
         coarse_candidates = self.index.search(q.coarse_vec or [], top_n=top_n)
+        coarse_elapsed_s = time.perf_counter() - coarse_start
+
         lexical_candidates = []
+        lexical_elapsed_s = 0.0
         if self.lexical_index:
+            lexical_start = time.perf_counter()
             lexical_candidates = self.lexical_index.search(query_tokens, top_n=top_n)
+            lexical_elapsed_s = time.perf_counter() - lexical_start
+        lexical_scores = {mem_id: score for mem_id, score in lexical_candidates}
+
+        timing_stats = {
+            "coarse_elapsed_s": float(coarse_elapsed_s),
+            "lexical_elapsed_s": float(lexical_elapsed_s),
+        }
 
         if candidate_mode == "coarse":
-            return coarse_candidates, {"candidate_size": float(len(coarse_candidates))}
+            return (
+                coarse_candidates,
+                {"candidate_size": float(len(coarse_candidates)), **timing_stats},
+                lexical_scores,
+            )
 
         if candidate_mode == "lexical":
             if self.lexical_index is None:
                 raise ValueError("candidate_mode=lexical 需要可用的 lexical_index")
             candidates = [(mem_id, 0.0) for mem_id, _ in lexical_candidates]
-            return candidates, {"candidate_size": float(len(candidates))}
+            return (
+                candidates,
+                {"candidate_size": float(len(candidates)), **timing_stats},
+                lexical_scores,
+            )
 
         # union: coarse ∪ lexical，coarse 分数按 coarse 路保留，缺失补 0.0。
         if self.lexical_index is None:
@@ -407,18 +462,15 @@ class Retriever:
         lexical_ids = {mem_id for mem_id, _ in lexical_candidates}
         denom = len(coarse_ids | lexical_ids)
         jaccard = (len(coarse_ids & lexical_ids) / denom) if denom else 1.0
-        return candidates, {
-            "candidate_size": float(len(candidates)),
-            "coarse_lexical_jaccard": float(jaccard),
-        }
-
-    def _build_lexical_scores(self, query_tokens: List[str], top_n: int) -> Dict[str, float]:
-        if not self.lexical_index:
-            return {}
-        return {
-            mem_id: score
-            for mem_id, score in self.lexical_index.search(query_tokens, top_n=top_n)
-        }
+        return (
+            candidates,
+            {
+                "candidate_size": float(len(candidates)),
+                "coarse_lexical_jaccard": float(jaccard),
+                **timing_stats,
+            },
+            lexical_scores,
+        )
 
     def _token_overlap(self, query_tokens: List[str], doc_tokens: List[str]) -> float:
         """简单 overlap 比例，用于“词法证据”。"""

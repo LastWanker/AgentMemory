@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentMemory Chat</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="chat-panel">
+        <header class="panel-head">
+          <div>
+            <h1>AgentMemory Chat</h1>
+            <p id="session-label">session: <span>-</span></p>
+            <p id="retrieval-label">检索模式: <span>reranker</span></p>
+          </div>
+          <button id="new-session-btn" type="button">新会话</button>
+        </header>
+        <div class="panel-scroll">
+          <div id="messages" class="messages"></div>
+        </div>
+        <form id="chat-form" class="composer">
+          <textarea id="chat-input" rows="4" placeholder="输入问题，回车发送，Shift+Enter 换行"></textarea>
+          <div class="composer-actions">
+            <label class="toggle">
+              <input id="coarse-only-toggle" type="checkbox" />
+              <span>只用粗召回（关闭 reranker）</span>
+            </label>
+            <button id="send-btn" type="submit">发送</button>
+          </div>
+        </form>
+      </section>
+      <aside class="memory-panel">
+        <header class="panel-head">
+          <h2>本次参考记忆</h2>
+        </header>
+        <div class="panel-scroll">
+          <div id="memory-list" class="memory-list"></div>
+        </div>
+      </aside>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+  </html>

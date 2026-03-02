@@ -187,3 +187,7 @@ data/VectorCache/eval_cache_normal.jsonl
 /data/VectorCache
 /data/_secrets
 /runs
+/_chat/data
+/_V3/runs
+/data
+/_V4/runs

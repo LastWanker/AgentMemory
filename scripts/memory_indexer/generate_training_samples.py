@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -13,14 +12,6 @@ from typing import Dict, List, Optional
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-from src.memory_indexer import (  # noqa: E402
-    SimpleHashEncoder,
-    Vectorizer,
-    build_memory_index,
-    build_memory_items,
-    retrieve_top_k,
-)
 
 DATA_DIR = ROOT / "data"
 MEMORY_EVAL_DIR = DATA_DIR / "Memory_Eval"
@@ -68,7 +59,6 @@ def build_samples_from_logs(sessions: Dict[str, List[Dict[str, object]]]) -> Lis
                 positives = sorted(curr_cites)
             if not positives:
                 continue
-            hard_negatives = sorted(prev_cites - set(positives))
             query_text = str(curr_turn.get("query_text", "")).strip()
             if not query_text:
                 continue
@@ -77,8 +67,6 @@ def build_samples_from_logs(sessions: Dict[str, List[Dict[str, object]]]) -> Lis
                     "query_id": f"{session_id}-{curr_turn.get('turn_index', i)}",
                     "query_text": query_text,
                     "positives": positives,
-                    "hard_negatives": hard_negatives,
-                    "candidates": sorted(prev_cites | curr_cites),
                     "meta": {
                         "source": "logs",
                         "session_id": session_id,
@@ -157,8 +145,6 @@ def build_samples_from_eval_dataset(dataset: str) -> List[Dict[str, object]]:
                 "query_id": str(payload.get("query_id") or f"synth-{idx}"),
                 "query_text": query_text,
                 "positives": positives,
-                "hard_negatives": [],
-                "candidates": [],
                 "meta": {
                     "source": "eval_synth",
                     "from_eval_dataset": dataset,
@@ -169,13 +155,7 @@ def build_samples_from_eval_dataset(dataset: str) -> List[Dict[str, object]]:
     return rows
 
 
-def configure_hf_runtime(local_only: bool, offline: bool) -> None:
-    os.environ["HF_LOCAL_FILES_ONLY"] = "1" if local_only else "0"
-    os.environ["HF_HUB_OFFLINE"] = "1" if offline else "0"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1" if offline else "0"
-
-
-def build_candidates_for_samples(
+def build_eval_rows(
     samples: List[Dict[str, object]],
     *,
     dataset: str,
@@ -183,45 +163,6 @@ def build_candidates_for_samples(
     encoder_backend: str,
     candidate_mode: str,
 ) -> List[Dict[str, object]]:
-    memory_path = resolve_memory_path(dataset)
-    payloads = [
-        json.loads(line)
-        for line in memory_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    memory_items = build_memory_items(
-        payloads,
-        source_default="manual",
-        chunk_strategy="sentence_window",
-        max_sentences=3,
-        tags_default=["general"],
-    )
-
-    if encoder_backend == "simple":
-        sentence_encoder = SimpleHashEncoder(dims=64)
-        token_encoder = sentence_encoder
-    else:
-        from src.memory_indexer.encoder.e5_token import E5TokenEncoder  # noqa: E402
-        from src.memory_indexer.encoder.hf_sentence import HFSentenceEncoder  # noqa: E402
-
-        configure_hf_runtime(local_only=True, offline=True)
-        sentence_encoder = HFSentenceEncoder(
-            model_name="intfloat/multilingual-e5-small",
-            tokenizer="jieba",
-        )
-        token_encoder = E5TokenEncoder(model_name="intfloat/multilingual-e5-small")
-
-    vectorizer = Vectorizer(strategy="token_pool_topk", k=8)
-    store, index, lexical_index = build_memory_index(
-        memory_items,
-        sentence_encoder,
-        vectorizer,
-        token_encoder=token_encoder,
-        cache_path=None,
-        return_lexical=True,
-    )
-    all_mem_ids = list(store.items.keys())
-
     enriched: List[Dict[str, object]] = []
     for row in samples:
         query_text = str(row.get("query_text", "")).strip()
@@ -229,59 +170,16 @@ def build_candidates_for_samples(
         if not query_text or not positives:
             continue
 
-        results = retrieve_top_k(
-            query_text,
-            sentence_encoder,
-            vectorizer,
-            store,
-            index,
-            lexical_index=lexical_index,
-            top_n=top_n,
-            top_k=top_n,
-            candidate_mode=candidate_mode,
-            token_encoder=token_encoder,
-        )
-        candidates = [item.mem_id for item in results]
-        for pos in positives:
-            if pos not in candidates:
-                candidates.insert(0, pos)
-
-        seen = set()
-        deduped_candidates: List[str] = []
-        for mem_id in candidates:
-            if mem_id in seen:
-                continue
-            seen.add(mem_id)
-            deduped_candidates.append(mem_id)
-        target_size = min(top_n, len(all_mem_ids))
-        if len(deduped_candidates) < target_size:
-            for mem_id in all_mem_ids:
-                if mem_id in seen:
-                    continue
-                seen.add(mem_id)
-                deduped_candidates.append(mem_id)
-                if len(deduped_candidates) >= target_size:
-                    break
-
-        hard_negatives = [
-            str(mid)
-            for mid in (row.get("hard_negatives") or [])
-            if str(mid).strip() and str(mid) not in set(positives)
-        ]
-        if not hard_negatives:
-            hard_negatives = [mid for mid in deduped_candidates if mid not in set(positives)][:10]
-
         enriched.append(
             {
                 "query_id": row.get("query_id"),
                 "query_text": query_text,
                 "positives": positives,
-                "candidates": deduped_candidates,
-                "hard_negatives": hard_negatives,
                 "meta": {
                     **(row.get("meta") if isinstance(row.get("meta"), dict) else {}),
                     "source": "followup",
                     "dataset": dataset,
+                    # 候选池统一在评测/训练时由粗召回 top_n 动态生成，不再落盘到 query。
                     "candidate_mode": candidate_mode,
                     "candidate_top_n": top_n,
                     "encoder_backend": encoder_backend,
@@ -310,8 +208,8 @@ def main() -> None:
         default="normal",
         help="Fallback source memory dataset for memory_followup bootstrap.",
     )
-    parser.add_argument("--top-n", type=int, default=20, help="Target minimum candidates per sample.")
-    parser.add_argument("--candidate-mode", choices=("coarse", "lexical", "union"), default="union")
+    parser.add_argument("--top-n", type=int, default=20, help="Metadata only; runtime retrieval budget.")
+    parser.add_argument("--candidate-mode", choices=("coarse", "lexical", "union"), default="coarse")
     parser.add_argument("--encoder-backend", choices=("simple", "hf"), default="simple")
     parser.add_argument(
         "--from-eval-dataset",
@@ -336,7 +234,7 @@ def main() -> None:
         return
 
     memory_followup = ensure_followup_memory(args.dataset, args.source_memory_dataset)
-    enriched = build_candidates_for_samples(
+    enriched = build_eval_rows(
         samples,
         dataset=args.dataset,
         top_n=args.top_n,

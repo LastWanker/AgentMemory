@@ -247,15 +247,21 @@ def build_memory_index(
 
     progress.finish()
     if cache_path:
-        _write_memory_cache(
-            cache_path,
-            items,
-            cached_payloads,
-            cache_signature=cache_signature,
-        )
-        trace(
-            f"记忆缓存更新完成: {cache_path} | hit={cache_hits} | miss={cache_misses}"
-        )
+        should_write_cache = cache_misses > 0 or not cache_path.exists()
+        if should_write_cache:
+            _write_memory_cache(
+                cache_path,
+                items,
+                cached_payloads,
+                cache_signature=cache_signature,
+            )
+            trace(
+                f"记忆缓存更新完成: {cache_path} | hit={cache_hits} | miss={cache_misses}"
+            )
+        else:
+            trace(
+                f"记忆缓存全命中，跳过写入: {cache_path} | hit={cache_hits} | miss={cache_misses}"
+            )
     trace("记忆库索引构建完成")
     if return_lexical and lexical_index:
         return store, index, lexical_index

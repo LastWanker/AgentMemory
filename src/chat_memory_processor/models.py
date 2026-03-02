@@ -26,6 +26,4 @@ class QuerySample:
     query_id: str
     query_text: str
     positives: list[str]
-    candidates: list[str]
-    hard_negatives: list[str]
     meta: dict[str, object]

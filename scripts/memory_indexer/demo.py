@@ -16,7 +16,7 @@ from src.memory_indexer import (
 def main() -> None:
     parser = argparse.ArgumentParser(description="demo 检索")
     parser.add_argument("--use-learned-scorer", action="store_true", help="启用 learned scorer")
-    parser.add_argument("--reranker-path", default="data/ModelWeights/tiny_reranker.pt", help="learned scorer 权重路径")
+    parser.add_argument("--reranker-path", default="data/ModelWeights/pairwise_reranker.pt", help="learned scorer 权重路径")
     args = parser.parse_args()
 
     # 演示默认开启输出，可用 set_trace(False) 或 MEMORY_INDEXER_TRACE=0 关闭

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentMemory V5 Chat</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="chat-panel">
+        <header class="panel-head">
+          <div>
+            <h1>AgentMemory V5 Chat</h1>
+            <p id="session-label">session: <span>-</span></p>
+            <p id="retrieval-label">检索模式: <span>coarse-only</span></p>
+          </div>
+          <button id="new-session-btn" type="button">新会话</button>
+        </header>
+        <div class="panel-scroll">
+          <div id="messages" class="messages"></div>
+        </div>
+        <form id="chat-form" class="composer">
+          <textarea id="chat-input" rows="4" placeholder="输入问题，回车发送，Shift+Enter 换行"></textarea>
+          <div class="composer-actions">
+            <div class="toggle">
+              <span>V5 当前固定使用 coarse-only 检索</span>
+            </div>
+            <button id="send-btn" type="submit">发送</button>
+          </div>
+        </form>
+      </section>
+      <aside class="memory-panel">
+        <header class="panel-head">
+          <h2>本次参考记忆</h2>
+        </header>
+        <div class="panel-scroll">
+          <div id="memory-list" class="memory-list"></div>
+        </div>
+      </aside>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+  </html>

@@ -60,9 +60,10 @@ def resolve_weight_path(row: Dict[str, str]) -> Optional[Path]:
             return candidate
     run_dir = (row.get("run_dir") or "").strip()
     if run_dir:
-        candidate = Path(run_dir) / "tiny_reranker.pt"
-        if candidate.exists():
-            return candidate
+        for name in ("pairwise_reranker.pt", "listwise_reranker.pt", "tiny_reranker.pt"):
+            candidate = Path(run_dir) / name
+            if candidate.exists():
+                return candidate
     return None
 
 
@@ -104,7 +105,7 @@ def materialize_best(
 ) -> Path:
     target_dir = best_root / dataset / encoder_backend
     target_dir.mkdir(parents=True, exist_ok=True)
-    target_weight = target_dir / "tiny_reranker.pt"
+    target_weight = target_dir / "pairwise_reranker.pt"
     if target_weight.exists():
         target_weight.unlink()
     link_mode = "hardlink"

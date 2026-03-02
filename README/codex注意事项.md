@@ -1,65 +1,70 @@
 # codex注意事项
 
-## 1. 搜索命令不要全盘乱扫
-- 优先用 `rg`，不要递归 `Get-ChildItem -Recurse`。
-- 尽量限制搜索范围到项目子目录：
-  - `scripts`
-  - `src`
-  - `README*`
-- 推荐命令：
-```powershell
-rg -n -S "关键词1|关键词2" scripts src README*
-```
+## 0. 先看这个再动手
+- 当前用户环境是 Windows + PyCharm，且用户明确要求命令统一走 `cmd`。
+- 当前工作偏“开发可用性与可控提速”，不是论文式全量评测。
+- 涉及数据与缓存写入时，默认先判断是否会污染用户常用缓存。
 
-## 2. 避免卡死的 rg 写法
-- 对大仓库搜索时，加排除规则：
-```powershell
-rg -n -S --glob '!data/**' --glob '!.venv/**' "关键词" .
-```
-- 若只查脚本路径相关，直接指定目录，不要 `.` 起手。
+## 1. 终端硬规则（已取代旧 PowerShell 习惯）
+- 一律使用 `cmd /c <command>`。
+- 不使用 PowerShell 语法，不使用 bash/WSL/Linux 命令。
+- 旧版“Get-Content 防卡”条目不再作为主规则；现在以 `cmd` 直跑为准。
 
-## 3. 执行前先确认当前目录
-- 必须先确认在仓库根目录：
-```powershell
-pwd
-```
-- 预期目录：`F:\GitHub\AgentMemory`
+## 2. 命令防卡与防误判
+- 禁止无范围 `git diff`（尤其对 `data/Processed/*.jsonl`）。
+- 先用 `git status --short` 看改动面，再按文件小范围 diff。
+- `rg` 查询在 `cmd` 下优先用多 `-e`，避免复杂引号/管道误解析：
+  - 推荐：`rg -n -e foo -e bar path`
+  - 不推荐：单条里混入 `|` 和复杂转义。
 
-## 4. 先看结构，再跑重命令
-- 先用轻命令确认文件存在：
-```powershell
-rg --files scripts src README
-```
-- 再跑精确搜索，避免一次打满输出。
+## 3. 缓存规则（现在是用户手动管理优先）
+- 正式缓存名：
+  - `data/VectorCache/memory_cache_users.jsonl`
+  - `data/VectorCache/eval_cache_users.jsonl`
+- 默认参数：
+  - `--cache-alias users`
+  - `--no-cache-signature`
+- `simple` 后端默认用 `users_simple`，不要覆盖 HF 的 `users`。
+- 烟测请用独立 alias（例如 `users_smoke`），不要污染正式缓存。
 
-## 5. 本项目当前脚本入口约定
-- 聊天记忆处理：`scripts/memory_processer/build_chat_memory.py`
-- memory_indexer 主入口：`scripts/memory_indexer/`
-- 旧路径脚本多数是兼容 wrapper，可用但不建议作为长期入口。
+## 4. 评测默认与性能参数（当前可用）
+- quick 入口：`scripts/memory_indexer/runtime/eval_followup_plus_chat_quick.py`
+- 当前默认：
+  - `top_n=30`
+  - `top_k=5`
+  - `policy=half_hard`
+  - `ablation=mix(auto)`
+  - `bootstrap=0`
+  - `eval_workers=4`
+  - `torch_num_threads=2`
+  - `scorer_batch_size=512`
+- 看日志时优先抓三行：
+  - `[cache] ... 跳过 HF 编码器初始化`
+  - `[timing] scoring_elapsed_s=...`
+  - `[runtime] elapsed_s=...`
 
-## 6. 调试策略（快）
-- 先 `--help` 验证脚本可启动。
-- 先跑小范围参数，再跑全量数据。
-- 先确认输出文件生成，再做下一步训练/评测。
+## 5. 本轮已知坑（经常导致“看起来像卡死”）
+- `cmd` 下正则/引号写法不对，会导致命令直接被 shell 误拆，不是代码问题。
+- 先跑了 `--max-eval-queries 200` 会把 `eval_cache_users.jsonl` 改成 200 条；之后跑默认 1000 会触发重建，属正常行为。
+- 长日志里 `Loading weights ...` 是第三方输出噪声，不是业务卡死。
 
-## 7. 聊天记忆处理推荐命令
-- 默认配置跑法：
-```powershell
-python scripts/memory_processer/build_chat_memory.py --config configs/chat_memory.yaml
-```
-- 生成 eval/query（已拆分独立脚本）：
-```powershell
-python scripts/memory_processer/build_chat_queries.py --config configs/chat_memory.yaml
-```
-- 生成 LLM 补充 query（可并发，输出独立文件）：
-```powershell
-python scripts/memory_processer/build_chat_supplemental_queries.py --config configs/chat_memory.yaml
-```
-- 合并 identity + 补充 query（不覆盖 identity）：
-```powershell
-python scripts/memory_processer/build_chat_queries.py --config configs/chat_memory.yaml --supplemental-queries data/Processed/eval_chat_supplemental.jsonl
-```
-- 覆盖配置跑法（示例）：
-```powershell
-python scripts/memory_processer/build_chat_memory.py --config configs/chat_memory.yaml --segmentation-mode adaptive --no-cross-session-merge
-```
+## 6. 失败恢复流程（必须执行）
+1. `cmd /c git status --short`
+2. 确认最近 run 目录的 `eval.log.txt` 是否完整落盘
+3. 先 `py_compile` 再继续长任务
+4. 若是缓存问题，优先切换 alias，不要直接删正式 users 缓存
+
+## 7. 语义边界（别再混）
+- `P`：positives（正例集合）
+- `C`：coarse recall top_n（检索候选池）
+- `R`：最终排序结果 top_k
+- 评测不再用 query 行内 `candidates/hard_negatives` 参与候选池构建。
+
+## 8. 数据与敏感信息
+- secrets 目录：`data/_secrets/`（已忽略提交）。
+- key 读取失败先检查编码/BOM，再查值本身。
+
+## 9. 开发过程要求
+- 大改前先定位最小改动点，优先小步验证（`py_compile` + 小样本）。
+- 若用户说“先讨论”，不要直接开长跑。
+- 每次关键变更都要同步追加 `README/开发日志.md`。

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 from .utils import Vector, dot
@@ -46,10 +47,61 @@ class TinyReranker:
         return _TinyReranker(*args, **kwargs)
 
 
+class BipartiteAlignTransformer:
+    """延迟构造 bipartite align transformer。"""
+
+    def __new__(cls, *args, **kwargs):
+        from .learned_scorer_bipartite import BipartiteAlignTransformer as _BipartiteAlignTransformer
+
+        return _BipartiteAlignTransformer(*args, **kwargs)
+
+
+class BipartiteLearnedFieldScorer:
+    """延迟构造 bipartite learned scorer。"""
+
+    def __new__(cls, *args, **kwargs):
+        from .learned_scorer_bipartite import BipartiteLearnedFieldScorer as _BipartiteLearnedFieldScorer
+
+        return _BipartiteLearnedFieldScorer(*args, **kwargs)
+
+
+def _extract_model_family(reranker_path: str) -> str:
+    path = Path(reranker_path)
+    if not path.exists():
+        return "tiny"
+    try:
+        import torch  # type: ignore
+
+        try:
+            state = torch.load(path, map_location="cpu", weights_only=True)
+        except TypeError:
+            state = torch.load(path, map_location="cpu")
+        if isinstance(state, dict):
+            meta = state.get("meta", {})
+            if isinstance(meta, dict):
+                family = str(meta.get("model_family", "")).strip().lower()
+                if family:
+                    return family
+                if "bipartite_tau" in meta or "bipartite_input_dim" in meta:
+                    return "bipartite"
+    except Exception:
+        return "tiny"
+    return "tiny"
+
+
 class LearnedFieldScorer:
     """延迟构造真正的 LearnedFieldScorer。"""
 
     def __new__(cls, *args, **kwargs):
-        from .learned_scorer import LearnedFieldScorer as _LearnedFieldScorer
+        reranker_path = kwargs.get("reranker_path")
+        if reranker_path is None and args:
+            reranker_path = args[0]
+        family = _extract_model_family(str(reranker_path)) if reranker_path else "tiny"
+        if family in {"bipartite", "bipartite_align_transformer"}:
+            from .learned_scorer_bipartite import (
+                BipartiteLearnedFieldScorer as _LearnedFieldScorer,
+            )
+        else:
+            from .learned_scorer import LearnedFieldScorer as _LearnedFieldScorer
 
         return _LearnedFieldScorer(*args, **kwargs)

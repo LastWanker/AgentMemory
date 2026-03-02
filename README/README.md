@@ -1,351 +1,82 @@
-# 计划书：自监督「记忆唤醒索引器」（文本 → 索引场/向量组 → 检索记忆）
+# AgentMemory 文档总览（对齐当前代码）
 
-> 目标：把当前文本转成“检索指令”（索引场/向量组），从记忆库中唤醒可能有用的片段（Top-k）。
+更新时间：2026-02-26
 
-## 当前总纲（简版，2026-02-20）
+## 1. 项目定位（当前实现）
+- 目标是可复现的工程链路，而不是抽象记忆理论验证：
+  - 聊天导出数据 -> 结构化 memory + eval/followup query
+  - 统一候选池口径下的检索路由评测
+  - pairwise/listwise tiny reranker 训练与对照
 
-以下条目优先级高于历史讨论中的细节分歧，用于后续实现对齐：
+## 2. 代码结构
+- `src/chat_memory_processor/`
+  - `extractor.py`：从 DeepSeek conversations mapping 抽取 user fragments
+  - `cleaning.py`：清洗与排除（空文本、超长、代码块、重复 dump 等）
+  - `segmentation.py`：会话内 local cluster（adaptive/fixed）
+  - `clustering.py`：跨会话 optional global cluster 合并
+  - `querygen.py`：identity query + supplemental query 合并
+  - `llm_querygen.py`：object/stance/intent 三层 supplemental（LLM + fallback）
+- `src/memory_indexer/`
+  - `ingest.py`：memory payload -> `MemoryItem`（`sentence_window` 切块）
+  - `pipeline.py`：建库与检索装配（含缓存读写）
+  - `index.py`：`CoarseIndex` + `LexicalIndex`
+  - `retriever.py`：候选构建、特征聚合、路由打分、指标落点
+  - `learned_scorer.py`：PyTorch tiny reranker、batch scorer、cardinality head
+  - `encoder/`：`SimpleHashEncoder`、`HFSentenceEncoder`、`E5TokenEncoder`
 
-1. 提取用户发言  
-   只把用户侧内容作为主资产。assistant 内容默认不进入训练主语料（可作为弱参考）。
+## 3. 数据产物（当前约定）
+- 聊天处理输出（`scripts.memory_processer.build_chat_memory`）
+  - `data/Processed/user_turns_raw.jsonl`
+  - `data/Processed/user_turns_dedup.jsonl`
+  - `data/Processed/memory_chat.jsonl`
+- query 输出（`scripts.memory_processer.build_chat_queries`）
+  - `data/Processed/eval_chat.jsonl`
+  - `data/Processed/eval_chat_followup.jsonl`
+- supplemental 输出（`scripts.memory_processer.build_chat_supplemental_queries`）
+  - 默认 `data/Processed/eval_chat_supplemental.api.jsonl`
+- 合并数据集（`scripts.memory_indexer.build_merged_dataset`）
+  - `data/Processed/memory_<dataset>.jsonl`
+  - `data/Processed/eval_<dataset>.jsonl`
+  - 可选同步 `data/Processed/groups/<dataset>/memory.jsonl|eval.jsonl`
 
-2. 清洗明显复制粘贴的大段内容  
-   先用规则法，优先剔除长代码块、超长模板文本、重复粘贴段。
+## 4. 评测与训练口径（当前关键点）
+- `eval_router.py`
+  - 支持 `soft/half_hard/hard`、ablation 组、bootstrap、run-dir 落盘
+  - `candidate_mode` 会被强制收敛到 `coarse`
+  - 指标包括：`RetrievalRecall@N`、`Recall@k`、`Recall@P`、`CoarseRankRecall@k`、`MRR`、`Top1` 及路由稳定性/耗时指标
+- `train_reranker.py`
+  - 支持 `pairwise/listwise`、`random/ranked` 负例、可选 cardinality head
+  - 同样强制 `candidate_mode=coarse`
+  - `positives/expected_mem_ids` 均可读取，旧字段 `candidates/hard_negatives` 仅兼容提示
+  - 训练正例匹配支持 `base_mem_id -> base_mem_id#cN` 切块映射
+- registry/caches
+  - `runs/registry.csv` 记录训练与评测 run 元信息
+  - `data/VectorCache/` 提供 query/memory 缓存；支持签名模式和 alias 模式
 
-3. 保持原始顺序  
-   所有样本必须保留会话内时间顺序（session 内严格按 turn 排序）。
-
-4. 进行“话题隔断”  
-   以会话窗口（chat/session）为基础，再用句向量相似度补充切分。  
-   当前建议阈值（后续可调）：相邻 user turn 相似度 < 0.35 且出现明显新关键词时，标记为断裂候选。
-
-5. 同一事件归为一个“聚集”  
-   同一聚集内样本互为候选正例；每条都可单独作为 query。  
-   未来训练要加入 query 改写增强（同义改写/口语改写/省略改写）以提升稳定性。
-
-6. 先规则打底，再逐步升级  
-   先完成可复用抽取与清洗管道，再考虑 LLM 摘要与更复杂主题切分。
-
-### 本阶段最小产物（建议）
-- `data/Processed/user_turns_raw.jsonl`：高召回原始用户语料（保序、仅基础清洗）。
-- `data/Processed/user_turns_dedup.jsonl`：去重/归一后语料（用于后续聚集与训练）。
-
-### 最小字段建议
-- `session_id`
-- `turn_id`
-- `role`
-- `text`
-- `timestamp`
-- `user_message_clean`
-- `topic_break_flag`
-- `cluster_id`
-- `candidate_pool_ids`
-
-### 实现备注（请保留在代码注释中）
-- 同一 cluster 内样本互为正例/候选正例。
-- 任一条样本都可作为 query 发起检索或训练样本生成。
-- 训练前应做 query 多表达增强，目标是鲁棒召回而非单句拟合。
-
-### 架构放置建议（已执行）
-- 保持 `src/memory_indexer/` 不动：继续专注检索/路由/打分。
-- 新增并列包 `src/chat_memory_processor/`：专注聊天数据抽取、清洗、话题隔断、聚集。
-- 这样分层后，脚本职责清晰：
-  - 检索评测训练脚本仍走 `memory_indexer`
-  - 聊天预处理脚本走 `chat_memory_processor`
-
-### 预处理脚本（最小可用）
+## 5. 推荐执行链路（当前）
+1. 生成聊天 memory：
 ```bash
-python scripts/memory_processer/build_chat_memory.py \
-  --config configs/chat_memory.yaml
+python -m scripts.memory_processer.build_chat_memory --config configs/chat_memory.yaml
+```
+2. 生成 supplemental 并重建 chat eval/followup：
+```bash
+python -m scripts.memory_processer.runtime.build_chat_supplemental_eval --config configs/chat_memory.yaml
+```
+3. 合并 followup + chat：
+```bash
+python -m scripts.memory_indexer.build_merged_dataset --dataset followup_plus_chat
+```
+4. 训练 pairwise/listwise：
+```bash
+python -m scripts.memory_indexer.train_pairwise_reranker --dataset followup_plus_chat
+python -m scripts.memory_indexer.train_listwise_reranker --dataset followup_plus_chat
+```
+5. 评测：
+```bash
+python -m scripts.memory_indexer.eval_router --dataset followup_plus_chat --use-learned-scorer
 ```
 
-默认输出：
-- `data/Processed/user_turns_raw.jsonl`
-- `data/Processed/user_turns_dedup.jsonl`
-
-### 讨论方案入口
-- 话题切分、聚类、query 反推（非 LLM 优先）见：
-  - `README/话题切分与聚类方案.md`
-
-## 1. 目标与边界（必须写死）
-
-### 我在做什么
-- 我做的是“检索指令生成器”：输入当前文本，输出可用于检索的索引场/向量组。  
-- 我追求的是“对后续文本有用的唤醒”，而不是复现人脑想法。  
-
-### 我明确不做什么
-- 不做“让机器记住文本/读心”这一类泛化目标。  
-- 不依赖大量人工标注（允许少量标注做加速/验证，但不是前提）。  
-- 不训练大模型（只训练小头或弱训练方案，个人算力可承受）。  
-
-### 退化风险与判断标准（必须提醒自己）
-- “索引场/输出场”很容易退化成“每条都用一点点”，模型会偷懒。  
-- 我真正想要的是**路由**：不选就不可见，逼模型做选择。  
-- 判据：训练/结构必须改变“可见集合”或其稀疏度，否则只是更平滑的相似度。  
-
----
-
-## 2. 术语小词典（我用的符号）
-
-| 术语 | 含义 |
-| --- | --- |
-| **x** | 当前输入文本（如当前轮对话） |
-| **y** | 后续文本（下一句/一段） |
-| **Encoder** | 把文本变成向量的模型（BERT / E5 / bge / text2vec 等） |
-| **Q（索引场/Query 向量组）** | 由 x 生成的检索指令 |
-| **M（Memory 向量组）** | 记忆条目的向量组表示 |
-| **K（Key 向量组）** | 由 y 生成的表示，训练时作为“目标方向”（通常与 M 同编码方式） |
-| **Top-k** | 挑分数最高的 k 条/块 |
-| **Adapter / LoRA** | 小参数微调方式；先不急用 |
-
-> 直白理解：我不动底座模型，只在旁边加一小撮可训练“插件”学偏好。
-
----
-
-## 3. 系统全貌（结构化视角）
-
-### 3.1 记忆库构建
-- **输入来源**  
-  - 历史对话（人际/AI/日志）  
-  - 公开对话语料  
-  - 自写的事件摘要（少量即可）  
-- **输出结构**  
-  - 每条记忆不再只存一个向量，而是存一个向量组 **M**。  
-  - 目标是保留更丰富的信息面，避免“平均向量”抹平细节。  
-
-### 3.2 检索流程
-- 输入文本 **x** → 编码成 **Q**（索引场）  
-- 用向量组相似度给每条 **M** 打分  
-  - 实际不会全库逐条算，先粗召回  
-- 输出 **Top-k** 记忆（或 ID/索引）  
-
-### 3.3 可选：自监督改进
-> 这部分是“锦上添花”，MVP 可以先不做或做最轻版本。
-
-- 训练样本来自时间结构  
-  - x = 前一段  
-  - y = 后一段  
-- 学习目标：让 **Q(x)** 更贴近 **K(y)**，并远离其他 y’（负样本）。  
-- 不需要人工标注“正确记忆条目”。后文 y 就是监督信号。  
-
----
-
-## 4. MVP：不训练大模型也能跑的版本
-
-### 4.1 编码器选择（第一优先级）
-我只用现成模型：
-- **句向量模型**：省事，但信息易糊  
-- **Token 级模型**：更符合“向量组/场”的想法  
-
-**折中方案（MVP）**  
-- 记忆条目用 token 向量组（更细粒度）  
-- 粗召回用句向量（更快）  
-
-### 4.2 记忆切块（粒度控制）
-MVP 先固定窗口：
-- 每个对话 turn 或连续 1～3 句  
-  - 太长：混主题  
-  - 太短：信息不足  
-
-### 4.3 生成记忆向量组 M（不平均）
-流程：
-1. 文本 → BERT 得到 token 向量  
-2. 只保留部分 token 向量作为 **M**  
-
-**无训练的挑选策略（MVP）**  
-- 去停用词/标点/过短词  
-- 可选：只保留名词/动词/形容词  
-- 取 TF-IDF 高的 token  
-- 可选：高注意力 token  
-
-**建议**  
-> TF-IDF + 停用词过滤足够。  
-每条记忆保留 16～64 个 token 向量（先固定 32）。  
-
-### 4.4 生成 Query 向量组 Q
-与 M 同逻辑：
-- 输入 x → token 向量 → 选 16～64 个组成 Q  
-- MVP 中 Q 与 M 使用同一生成规则，降低变量。  
-
-### 4.5 向量组相似度（核心评分）
-> “只要某一面强对齐，就算匹配成功。”
-
-打分方式：  
-- 对 Q 中每个向量 q，在 M 中找最相近向量 m（最大余弦相似度）  
-- 得到一组“最佳匹配分”  
-- 用 **top-3 平均** 或直接平均作为最终分数  
-
-直觉：关键 token 只要能在记忆里找到强对应，就能把这条记忆抬上去。  
-
-### 4.6 粗召回（避免全库逐条算）
-粗召回策略：
-- 每条记忆再存一个句向量（可用 token 平均向量）  
-- 输入 x 也算句向量  
-- 用 ANN 或余弦排序先捞 top-500 / top-1000  
-- 再做向量组精排  
-
-原则：**宁可多捞一点**，精排再救回来。  
-
-### 4.7 MVP 交付物
-- build_index：构建记忆库向量  
-- retrieve：输入一句话 → 输出 top-k 记忆 + 分数 + 命中 token  
-- 小测试集：20～50 组对话片段（肉眼检验）  
-
-**成功标准（朴素）**  
-- “充电/坐不住/出去”能检到“抽烟/借火/朋友顺火机”等记忆  
-- 失败能解释：分词错 / 停用词错 / 记忆切块混主题  
-
----
-
-## 5. 自监督升级版（利用后文 y）
-
-### 5.1 数据来源
-- 公开对话数据集  
-- 自己的聊天记录（最个性化）  
-- 自写“事件—后续”片段（少量补充）  
-
-构造规则：
-- x = 前一段（1 句或 1 turn）  
-- y = 后一段（1 句或 1～2 turn）  
-
-### 5.2 训练目标（弱监督）
-我不监督“想到了哪条记忆”，只监督更弱但可行的目标：  
-> 让 Q(x) 更容易找回 K(y)。  
-
-直觉：如果 x 的索引场能对齐 y 的关键 token，我就学到了“未来走向线索”。  
-
-### 5.3 负样本（核心坑）
-最省事的负样本：
-- in-batch negatives：同批次其他 y  
-
-硬负样本：
-- 先粗召回一批看起来像的 y  
-- 除真实 y 外都当负例  
-
-### 5.4 防坍缩（常量解）
-坍缩是“目标太松”的常量解问题。  
-**对比学习**必须包含“拉近正例 + 推远负例”，否则会塌。  
-
-### 5.5 算力有限的训练策略
-- 路径 A：只训练小投影头（MLP）  
-  - 把 token 向量做小变换，更适配未来对齐  
-- 路径 B：Adapter/LoRA（极少参数）  
-
-建议：先走路径 A，简单到离谱也能看到提升。  
-
----
-
-## 6. 优化路线图（从能用到好用）
-
-### 6.1 更聪明的 token 选择
-- 从 TF-IDF 升级到实体/关键词抽取  
-- 加简单事件结构（谁/做了什么/为什么）  
-- 先做摘要/标题，再把摘要也做向量组（双通道检索）  
-
-### 6.2 多查询向量（更像“场”）
-把 Q 从“点云”升级成“方向集合”：  
-- 聚类 token 向量，取 3～8 个中心  
-- 或规则选 3～8 个最关键词 token 向量  
-
-### 6.3 更强精排（只在 top-500 上跑）
-- 把 (x, 记忆文本) 拼起来喂 reranker（交叉编码器）  
-- 只在候选上跑，计算可承受  
-
-### 6.4 个性化（后续再做）
-- 记忆库本身就是个性化  
-- 小投影头训练就是个性化  
-- Adapter/LoRA 可等数据多再考虑  
-
-### 6.5 路由学习路线（软 → 半硬 → 硬）
-- **软路由**：Top-N 都可见，只按权重衰减融合；目标是可用、可解释、可观测。  
-- **半硬路由**：Top-k 进入主干计算，其余只做弱信号或对比损失。  
-- **硬路由**：Top-k 之外完全不可见，选错直接导致失败，强迫路由学习发生。  
-
-**必须观察的指标**  
-- 路由熵：权重分布是否越来越尖锐。  
-- Top-k 权重占比：前 k 条承担了多少总权重。  
-- 一致性：相似查询的高权重记忆是否稳定。  
-- 反事实敏感性：删掉高权重记忆后质量下降多少。  
-
----
-
-## 7. 预期困难（我提前写好）
-
-1. **记忆切块不合理**  
-   - 太长：混主题  
-   - 太短：信息不足  
-   - 解法：先固定窗口，再逐步智能切块  
-
-2. **中文分词/停用词处理影响巨大**  
-   - “的、了、啊”污染向量组  
-   - 解法：靠谱停用词表 + 必要词性过滤  
-
-3. **相似度函数太敏感或太迟钝**  
-   - max-sim：撞到一个词就上天  
-   - mean-sim：过度平均  
-   - 解法：top-k 聚合（top-3 / top-5 mean）  
-
-4. **粗召回漏召回**  
-   - 精排再强也救不了  
-   - 解法：粗召回阈值调大（top-1000）  
-
-5. **自监督训练不稳定**  
-   - 一上来就想训聪明容易挫败  
-   - 解法：先做无训练版本跑通链路，再加小头训练  
-
----
-
-## 8. 里程碑与执行顺序（我严格按此推进）
-
-### 阶段 1：跑通检索闭环（完全不训练）
-- 选中文编码器  
-- 记忆切块  
-- 生成 M  
-- 生成 Q  
-- 粗召回 + 精排  
-- 输出 top-k + 可解释日志（命中 token）  
-
-**交付**：可反复测试的闭环，能看到“像个东西”。  
-
-### 阶段 2：让“向量组/场”更接近我想要的
-- 改 token 选择策略（关键词/实体/聚类中心）  
-- Q 变成 3～8 个中心向量  
-- 调整相似度聚合方式  
-
-**交付**：能稳定复现“关联式唤醒”。  
-
-### 阶段 3：轻自监督（只训小投影头）
-- 用 (x, y) 构造训练集  
-- in-batch negatives 对比学习  
-- 只训练小头，不动底座  
-
-**交付**：固定测试集上 top-k 相关性有统计提升。  
-
-### 阶段 4：高级但可选
-- 硬负样本挖掘  
-- reranker 精排  
-- Adapter/LoRA 个性化插件  
-
----
-
-## 9. 材料获取（现实建议）
-
-### A. 对话数据（做 x→y）
-- 公开中文对话数据集（闲聊/论坛/QA）  
-- 自己聊天记录（价值最高）  
-
-### B. 记忆库内容（做 M）
-- 自己的历史对话/笔记/日志  
-- 少量人工编写“生活化记忆条目”（冷启动）  
-- 网络素材可用，但注意风格差异  
-
-**MVP 阶段的核心**：不追求数据量，而是验证直觉。  
-
----
-
-## 10. 最后一句话
-
-我现在最该做的不是继续争论“理论完不完美”，而是把可观察闭环建起来：  
-先用现成模型把“向量组记忆 + 向量组查询 + 粗召回 + 精排”跑通；跑通之后，我就有了一个能承载改进的骨架。自监督训练、硬负样本、个性化插件，全都能在这个骨架上逐步加，不会变成空谈。  
-
-如果我愿意更“工程化”一点，我下一步会把 MVP 的接口设计也写出来：索引文件格式、每条记忆字段、检索日志输出的可解释信息，以及最小测试用例的组织方式。  
+## 6. 进一步阅读
+- `README/伪代码框架.md`：按当前实现组织的伪代码骨架
+- `README/接口设计.md`：JSONL 字段、Python 接口、脚本契约
+- `README/开发日志.md`：按日期记录变更与口径修正

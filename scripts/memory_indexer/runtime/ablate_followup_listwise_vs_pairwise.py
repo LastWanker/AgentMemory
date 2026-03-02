@@ -34,7 +34,7 @@ def main() -> None:
         "--seeds",
         "11",
         "--bootstrap",
-        "200",
+        "0",
         "--run-dir",
         str(run_dir),
     ]

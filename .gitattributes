@@ -1,2 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Avoid huge diff rendering on generated artifacts.
+data/Processed/*.jsonl -diff
+data/Processed/**/*.jsonl -diff
+
+# Model weights are binary artifacts; never text-diff them.
+data/ModelWeights/*.pt binary
+data/ModelWeights/**/*.pt binary

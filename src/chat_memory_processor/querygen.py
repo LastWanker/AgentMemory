@@ -44,8 +44,6 @@ def load_supplemental_query_samples(path: Path) -> List[QuerySample]:
             positives = [mem_id]
         if not positives:
             continue
-        candidates = _normalize_list(payload.get("candidates")) or list(positives)
-        hard_negatives = _normalize_list(payload.get("hard_negatives"))
         query_id = str(payload.get("query_id", "")).strip() or f"supq-{idx:06d}"
         meta = payload.get("meta")
         samples.append(
@@ -53,8 +51,6 @@ def load_supplemental_query_samples(path: Path) -> List[QuerySample]:
                 query_id=query_id,
                 query_text=query_text,
                 positives=positives,
-                candidates=candidates,
-                hard_negatives=hard_negatives,
                 meta=meta if isinstance(meta, dict) else {"source": "supplemental_query_file"},
             )
         )
@@ -82,8 +78,6 @@ def merge_query_samples(base: Sequence[QuerySample], supplemental: Sequence[Quer
                 query_id=query_id,
                 query_text=row.query_text,
                 positives=list(row.positives),
-                candidates=list(row.candidates),
-                hard_negatives=list(row.hard_negatives),
                 meta=dict(row.meta),
             )
         )
@@ -98,8 +92,6 @@ def to_followup_rows(samples: Sequence[QuerySample]) -> List[Dict[str, object]]:
                 "query_id": item.query_id,
                 "query_text": item.query_text,
                 "positives": item.positives,
-                "candidates": item.candidates,
-                "hard_negatives": item.hard_negatives,
                 "meta": item.meta,
             }
         )
@@ -133,9 +125,6 @@ def _build_identity_samples(memories: Sequence[Dict[str, object]]) -> List[Query
                 query_id=f"chatq-{idx:06d}",
                 query_text=query_text,
                 positives=[mem_id],
-                # Identity channel keeps candidates minimal; enrichment should be external.
-                candidates=[mem_id],
-                hard_negatives=[],
                 meta={
                     "source": "memory_identity",
                     "channel": "identity",

@@ -23,7 +23,7 @@ def main() -> None:
     parser.add_argument("--from-eval-dataset", help="Synthesize from existing eval dataset, e.g. normal")
     parser.add_argument("--dataset", default="followup")
     parser.add_argument("--encoder-backend", choices=("hf", "simple"), default="hf")
-    parser.add_argument("--candidate-mode", choices=("coarse", "lexical", "union"), default="union")
+    parser.add_argument("--candidate-mode", choices=("coarse", "lexical", "union"), default="coarse")
     parser.add_argument("--top-n", type=int, default=20)
     args = parser.parse_args()
 

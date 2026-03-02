@@ -1,0 +1,6 @@
+serving:
+  host: 127.0.0.1
+  port: 8891
+
+deepseek:
+  model: deepseek-chat

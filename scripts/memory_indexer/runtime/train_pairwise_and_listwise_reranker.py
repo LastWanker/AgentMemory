@@ -30,13 +30,13 @@ def default_by_profile(profile: str) -> Dict[str, int]:
     if profile == "quick":
         return {"epochs": 3, "top_n": 20}
     # formal: slower but closer to your intended final run.
-    return {"epochs": 20, "top_n": 30}
+    return {"epochs": 30, "top_n": 30}
 
 
 def maybe_reset_weights(reset_weights: bool) -> None:
     if not reset_weights:
         return
-    for name in ("pairwise_reranker.pt", "listwise_reranker.pt"):
+    for name in ("pairwise_bipartite_reranker.pt", "listwise_bipartite_reranker.pt"):
         path = MODEL_WEIGHTS_DIR / name
         if path.exists():
             path.unlink()
@@ -57,6 +57,8 @@ def build_train_cmd(
     seed: int,
     device: str,
     hf_local_only: bool,
+    cache_alias: str,
+    use_cache_signature: bool,
 ) -> List[str]:
     cmd = [
         py,
@@ -80,7 +82,11 @@ def build_train_cmd(
         str(seed),
         "--device",
         device,
+        "--cache-alias",
+        cache_alias,
     ]
+    if not use_cache_signature:
+        cmd.append("--no-cache-signature")
     if hf_local_only:
         cmd.append("--hf-local-only")
     return cmd
@@ -101,6 +107,12 @@ def main() -> None:
         help="Training device. 'cuda' is preferred; train_reranker auto-fallbacks to CPU if unavailable.",
     )
     parser.add_argument("--hf-online", action="store_true", help="Allow HF online mode (default local-only).")
+    parser.add_argument("--cache-alias", default="users")
+    parser.add_argument(
+        "--use-cache-signature",
+        action="store_true",
+        help="Use signature-based cache validation (default off for user-managed aliases).",
+    )
     parser.add_argument(
         "--reset-weights",
         action="store_true",
@@ -115,8 +127,8 @@ def main() -> None:
 
     # Pitfall note:
     # keep paths stable for eval scripts; wrappers will auto-backup when overwriting.
-    pair_weight = MODEL_WEIGHTS_DIR / "pairwise_reranker.pt"
-    list_weight = MODEL_WEIGHTS_DIR / "listwise_reranker.pt"
+    pair_weight = MODEL_WEIGHTS_DIR / "pairwise_bipartite_reranker.pt"
+    list_weight = MODEL_WEIGHTS_DIR / "listwise_bipartite_reranker.pt"
     pair_weight.parent.mkdir(parents=True, exist_ok=True)
     list_weight.parent.mkdir(parents=True, exist_ok=True)
     maybe_reset_weights(args.reset_weights)
@@ -141,6 +153,8 @@ def main() -> None:
             seed=args.seed,
             device=args.device,
             hf_local_only=hf_local_only,
+            cache_alias=args.cache_alias,
+            use_cache_signature=args.use_cache_signature,
         )
     )
     run(
@@ -157,6 +171,8 @@ def main() -> None:
             seed=args.seed,
             device=args.device,
             hf_local_only=hf_local_only,
+            cache_alias=args.cache_alias,
+            use_cache_signature=args.use_cache_signature,
         )
     )
 

@@ -33,7 +33,7 @@ from scripts.memory_indexer.runtime_utils import (
     write_json,
 )
 
-DEFAULT_BOOTSTRAP = 500
+DEFAULT_BOOTSTRAP = 0
 DEFAULT_SEEDS = [11, 29, 47]
 
 
@@ -192,13 +192,14 @@ def run_command(cmd: List[str], output_path: Path) -> str:
 
 
 def parse_eval_metrics(output: str) -> Dict[str, float]:
-    metric_matches = re.findall(
-        r"Recall@k=([0-9]*\.?[0-9]+)\s+\|\s+MRR=([0-9]*\.?[0-9]+)\s+\|\s+Top1=([0-9]*\.?[0-9]+)",
-        output,
-    )
-    if not metric_matches:
+    recall_matches = re.findall(r"Recall@k=([0-9]*\.?[0-9]+)", output)
+    mrr_matches = re.findall(r"MRR=([0-9]*\.?[0-9]+)", output)
+    top1_matches = re.findall(r"Top1=([0-9]*\.?[0-9]+)", output)
+    if not recall_matches or not mrr_matches or not top1_matches:
         raise ValueError("Failed to parse core metrics from eval output.")
-    recall, mrr, top1 = metric_matches[-1]
+    recall = recall_matches[-1]
+    mrr = mrr_matches[-1]
+    top1 = top1_matches[-1]
 
     ci_matches = re.findall(
         r"Recall@k CI:\s*([0-9]*\.?[0-9]+)\s*±\s*([0-9]*\.?[0-9]+)\s*"
@@ -316,7 +317,22 @@ def eval_one(
             records = payload.get("records", [])
             if isinstance(records, list) and records:
                 for record in records:
-                    if record.get("ablation_group") == "baseline(auto)" and record.get("policy") == "soft":
+                    if record.get("ablation_group") == "mix(auto)" and record.get("policy") == "half_hard":
+                        metrics = record.get("metrics", {})
+                        bs = record.get("bootstrap", {})
+                        recall = bs.get("recall_at_k", [metrics.get("recall_at_k", 0.0), 0.0, metrics.get("recall_at_k", 0.0), metrics.get("recall_at_k", 0.0)])
+                        return {
+                            "Recall@5_mean": float(recall[0]),
+                            "Recall@5_CI_low": float(recall[2]),
+                            "Recall@5_CI_high": float(recall[3]),
+                            "Recall@5_std": float(recall[1]),
+                            "Top1_mean": float(metrics.get("top1_acc", 0.0)),
+                            "MRR_mean": float(metrics.get("mrr", 0.0)),
+                        }
+                for record in records:
+                    if record.get("ablation_group") in {"mix(auto)", "baseline(auto)"} and record.get(
+                        "policy"
+                    ) in {"half_hard", "soft"}:
                         metrics = record.get("metrics", {})
                         bs = record.get("bootstrap", {})
                         recall = bs.get("recall_at_k", [metrics.get("recall_at_k", 0.0), 0.0, metrics.get("recall_at_k", 0.0), metrics.get("recall_at_k", 0.0)])
@@ -348,8 +364,8 @@ def main() -> None:
     runs_root = Path(args.runs_root)
 
     common_dataset = args.dataset or cfg_get(loaded_config, "common.dataset", "normal")
-    common_candidate_mode = cfg_get(loaded_config, "common.candidate_mode", "union")
-    common_top_n = int(cfg_get(loaded_config, "common.top_n", 20))
+    common_candidate_mode = cfg_get(loaded_config, "common.candidate_mode", "coarse")
+    common_top_n = int(cfg_get(loaded_config, "common.top_n", 30))
     common_top_k = int(cfg_get(loaded_config, "common.top_k", 5))
     common_backend = cfg_get(loaded_config, "common.encoder_backend", "simple")
     encoder_backend = args.encoder_backend or common_backend
@@ -359,7 +375,7 @@ def main() -> None:
         "top_n": common_top_n,
         "top_k": common_top_k,
         "candidate_mode": common_candidate_mode,
-        "policies": cfg_get(loaded_config, "ablation_matrix.policies", "soft"),
+        "policies": cfg_get(loaded_config, "ablation_matrix.policies", "half_hard"),
         "ablation": cfg_get(loaded_config, "ablation_matrix.ablation", "baseline"),
         "encoder_backend": encoder_backend,
     }
@@ -408,7 +424,8 @@ def main() -> None:
             ensure_dir(seed_dir)
             print(f"[ablation] start config={config.name} seed={seed}")
 
-            weight_path = seed_dir / "tiny_reranker.pt"
+            weight_name = "pairwise_reranker.pt" if config.loss_type == "pairwise" else "listwise_reranker.pt"
+            weight_path = seed_dir / weight_name
             train_log = seed_dir / "train.log.txt"
             eval_log = seed_dir / "eval.log.txt"
             eval_json = seed_dir / "eval.metrics.json"

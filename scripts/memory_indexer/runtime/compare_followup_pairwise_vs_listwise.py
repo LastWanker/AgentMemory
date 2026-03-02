@@ -34,7 +34,17 @@ def parse_eval_metrics(eval_metrics_path: Path) -> Tuple[float, float, float]:
     payload = json.loads(eval_metrics_path.read_text(encoding="utf-8"))
     records = payload.get("records", [])
     for record in records:
-        if record.get("ablation_group") == "baseline(auto)" and record.get("policy") == "soft":
+        if record.get("ablation_group") == "mix(auto)" and record.get("policy") == "half_hard":
+            metrics = record.get("metrics", {})
+            return (
+                float(metrics.get("recall_at_k", 0.0)),
+                float(metrics.get("top1_acc", 0.0)),
+                float(metrics.get("mrr", 0.0)),
+            )
+    for record in records:
+        if record.get("ablation_group") in {"mix(auto)", "baseline(auto)"} and record.get(
+            "policy"
+        ) in {"half_hard", "soft"}:
             metrics = record.get("metrics", {})
             return (
                 float(metrics.get("recall_at_k", 0.0)),
@@ -56,7 +66,7 @@ def main() -> None:
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--dataset", default="followup")
     parser.add_argument("--encoder-backend", choices=("hf", "simple"), default="hf")
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--top-n", type=int, default=30)
     parser.add_argument("--top-k", type=int, default=5)
     # Pitfall note:
@@ -64,6 +74,12 @@ def main() -> None:
     # Keep default at 0 and only enable when you explicitly need CI.
     parser.add_argument("--bootstrap", type=int, default=0)
     parser.add_argument("--seed", type=int, default=11)
+    parser.add_argument("--cache-alias", default="users")
+    parser.add_argument(
+        "--use-cache-signature",
+        action="store_true",
+        help="Use signature-based cache validation (default off for fixed user cache files).",
+    )
     # Pitfall note:
     # by default do NOT retrain here; this script compares existing weights.
     parser.add_argument("--train", action="store_true", help="Train pairwise/listwise before eval.")
@@ -81,6 +97,10 @@ def main() -> None:
     list_weight = REPO_ROOT / "data" / "ModelWeights" / "listwise_reranker.pt"
 
     py = resolve_python()
+    cache_alias = args.cache_alias
+    if args.encoder_backend != "hf" and cache_alias == "users":
+        cache_alias = "users_simple"
+        print("[compare] info: simple backend detected, cache alias auto-switched to users_simple.")
 
     if args.train:
         run(
@@ -161,17 +181,20 @@ def main() -> None:
         "--top-k",
         str(args.top_k),
         "--candidate-mode",
-        "union",
+        "coarse",
         "--policies",
-        "soft",
+        "half_hard",
         "--ablation-groups",
-        "baseline(auto)",
+        "mix(auto)",
         "--bootstrap",
         str(args.bootstrap),
-        "--no-consistency-pass",
         "--use-learned-scorer",
+        "--cache-alias",
+        cache_alias,
         "--hf-local-only",
     ]
+    if not args.use_cache_signature:
+        common_eval_args.append("--no-cache-signature")
 
     run(
         [

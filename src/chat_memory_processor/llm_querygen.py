@@ -232,8 +232,6 @@ async def _generate_layer_rows(
                 "query_id": f"llmq-{cluster.cluster_id}-{layer}-{i:03d}",
                 "query_text": query_text,
                 "positives": list(cluster.mem_ids),
-                "candidates": list(cluster.mem_ids),
-                "hard_negatives": [],
                 "meta": {
                     "source": "chat_llm_supplemental",
                     "channel": "supplemental",
