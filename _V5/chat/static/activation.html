@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentMemory V5 点亮过程</title>
+    <link rel="stylesheet" href="/static/activation.css" />
+  </head>
+  <body>
+    <main class="activation-layout">
+      <header class="activation-head">
+        <div>
+          <h1>点亮过程</h1>
+          <p id="activation-query">当前没有可展示的联想 trace。</p>
+        </div>
+        <div class="activation-actions">
+          <button id="zoom-out-btn" type="button">缩小</button>
+          <button id="zoom-reset-btn" type="button">重置</button>
+          <button id="zoom-in-btn" type="button">放大</button>
+          <a class="back-link" href="/">返回对话</a>
+        </div>
+      </header>
+      <section class="activation-stage">
+        <div class="stage-scroll">
+          <div id="stage-scale" class="stage-scale">
+            <svg id="activation-svg" viewBox="0 0 2400 1500" role="img" aria-label="association activation"></svg>
+          </div>
+        </div>
+      </section>
+      <footer class="activation-foot">
+        <div id="activation-summary">等待联想 trace…</div>
+      </footer>
+    </main>
+    <script src="/static/activation.js"></script>
+  </body>
+</html>

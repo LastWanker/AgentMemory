@@ -3,14 +3,17 @@ body {
   height: 100%;
   margin: 0;
   font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-  background: #f3f1eb;
+  background:
+    radial-gradient(circle at top left, rgba(213, 226, 214, 0.55), transparent 28%),
+    radial-gradient(circle at top right, rgba(236, 224, 197, 0.5), transparent 24%),
+    #f3f1eb;
   color: #1f2328;
   overflow: hidden;
 }
 
 .layout {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: 1.08fr 1.7fr 1.08fr;
   gap: 16px;
   height: 100vh;
   padding: 16px;
@@ -20,34 +23,78 @@ body {
 
 .chat-panel,
 .memory-panel {
-  background: #fffdf8;
+  background: rgba(255, 253, 248, 0.96);
   border: 1px solid #d7d1c4;
-  border-radius: 16px;
-  box-shadow: 0 10px 30px rgba(77, 64, 36, 0.08);
+  border-radius: 18px;
+  box-shadow: 0 12px 28px rgba(77, 64, 36, 0.08);
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
 }
 
+.association-panel {
+  background:
+    linear-gradient(180deg, rgba(235, 243, 236, 0.95), rgba(255, 252, 246, 0.96));
+}
+
+.coarse-panel {
+  background:
+    linear-gradient(180deg, rgba(250, 245, 235, 0.96), rgba(255, 252, 246, 0.96));
+}
+
 .panel-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   padding: 16px 20px;
   border-bottom: 1px solid #ece6da;
+  gap: 12px;
 }
 
 .panel-head h1,
 .panel-head h2,
+.panel-head h3,
 .memory-card h3 {
   margin: 0;
+}
+
+.panel-subtitle,
+#session-label,
+#retrieval-label,
+.memory-meta,
+.memory-empty,
+.tag-empty {
+  margin: 4px 0 0;
+  font-size: 12px;
+  opacity: 0.74;
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .panel-scroll {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+.side-scroll {
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.panel-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .messages {
@@ -109,7 +156,7 @@ body {
 .composer {
   border-top: 1px solid #ece6da;
   padding: 16px;
-  background: #fffdf8;
+  background: rgba(255, 253, 248, 0.98);
 }
 
 .composer textarea {
@@ -141,10 +188,6 @@ body {
   color: #4a432f;
 }
 
-.toggle input {
-  accent-color: #715f3f;
-}
-
 button {
   border: 0;
   border-radius: 999px;
@@ -154,20 +197,35 @@ button {
   cursor: pointer;
 }
 
+.secondary-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 10px 16px;
+  color: #715f3f;
+  border: 1px solid #b6ab94;
+  text-decoration: none;
+  background: #fff9ef;
+}
+
 .memory-list {
-  height: 100%;
-  padding: 16px;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+#coarse-list {
+  height: 100%;
+  padding: 16px;
+  overflow-y: auto;
 }
 
 .memory-card {
   border: 1px solid #e6ddce;
   border-radius: 12px;
   padding: 12px;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.95);
 }
 
 .memory-card.pending {
@@ -175,23 +233,54 @@ button {
   background: #faf5ea;
 }
 
-.memory-meta,
-.memory-empty,
-#session-label,
-#retrieval-label {
-  font-size: 12px;
-  opacity: 0.75;
+.association-card {
+  border-color: #d6e5d4;
+  background: rgba(249, 255, 249, 0.95);
 }
 
-@media (max-width: 900px) {
+.tag-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(81, 118, 86, 0.18);
+  background: rgba(230, 244, 232, 0.88);
+  color: #254029;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.tag-pill.bridge {
+  background: rgba(245, 236, 204, 0.9);
+  border-color: rgba(161, 126, 36, 0.22);
+  color: #654e18;
+}
+
+.tag-level {
+  font-weight: 700;
+  opacity: 0.72;
+}
+
+.tag-score {
+  opacity: 0.6;
+}
+
+@media (max-width: 1180px) {
   .layout {
     grid-template-columns: 1fr;
     height: 100vh;
   }
 
-  .chat-panel,
-  .memory-panel {
-    min-height: 0;
+  .association-panel,
+  .coarse-panel {
+    min-height: 260px;
   }
 }
 

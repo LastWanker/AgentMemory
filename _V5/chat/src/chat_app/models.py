@@ -31,6 +31,10 @@ class ChatResponse(BaseModel):
     session_id: str
     reply: str
     memory_refs: List[MemoryRef] = Field(default_factory=list)
+    coarse_memory_refs: List[MemoryRef] = Field(default_factory=list)
+    association_memory_refs: List[MemoryRef] = Field(default_factory=list)
+    association_tags: List[Dict[str, Any]] = Field(default_factory=list)
+    association_trace: Dict[str, Any] = Field(default_factory=dict)
     history: List[ChatTurn] = Field(default_factory=list)
     retrieval_label: str = ""
 

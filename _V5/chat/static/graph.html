@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentMemory V5 Graph View</title>
+    <link rel="stylesheet" href="/static/graph.css" />
+  </head>
+  <body>
+    <main class="graph-layout">
+      <section class="hero-panel">
+        <div class="hero-copy">
+          <p class="eyebrow">V5 Association Graph</p>
+          <h1>概念树浏览</h1>
+          <p class="hero-text">
+            这里只做精确匹配，不做向量召回。输入 `L1/L2/L3` 和概念名，直接查看它在当前联想图里的父子关系。
+          </p>
+        </div>
+        <div class="hero-actions">
+          <a class="ghost-link" href="/">返回 Chat</a>
+        </div>
+      </section>
+
+      <section class="control-panel">
+        <form id="graph-form" class="graph-form">
+          <label class="field">
+            <span>层级</span>
+            <select id="level-select">
+              <option value="L1">L1</option>
+              <option value="L2">L2</option>
+              <option value="L3">L3</option>
+            </select>
+          </label>
+          <label class="field field-grow">
+            <span>概念名</span>
+            <input id="name-input" type="text" placeholder="例如：拉丁字母" />
+          </label>
+          <button type="submit" id="search-btn">查看结构</button>
+        </form>
+        <div id="status-bar" class="status-bar">等待查询。</div>
+      </section>
+
+      <section id="result-root" class="result-root">
+        <div class="empty-state">
+          <h2>还没有结果</h2>
+          <p>先选层级，再输入精确概念名。</p>
+        </div>
+      </section>
+    </main>
+    <script src="/static/graph.js"></script>
+  </body>
+  </html>

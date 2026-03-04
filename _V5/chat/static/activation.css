@@ -1,0 +1,165 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background:
+    radial-gradient(circle at top, rgba(82, 92, 139, 0.14), transparent 28%),
+    radial-gradient(circle at bottom, rgba(152, 96, 96, 0.14), transparent 32%),
+    #05070c;
+  color: #eef2ff;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
+.activation-layout {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+}
+
+.activation-head,
+.activation-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: rgba(7, 11, 20, 0.76);
+  border-bottom: 1px solid rgba(144, 162, 203, 0.16);
+}
+
+.activation-foot {
+  border-bottom: 0;
+  border-top: 1px solid rgba(144, 162, 203, 0.16);
+  color: rgba(232, 238, 255, 0.76);
+  font-size: 12px;
+}
+
+.activation-head h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.activation-head p {
+  margin: 6px 0 0;
+  color: rgba(232, 238, 255, 0.72);
+  font-size: 12px;
+}
+
+.activation-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.activation-actions button,
+.back-link {
+  border: 1px solid rgba(141, 159, 194, 0.2);
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: rgba(20, 27, 42, 0.95);
+  color: #f4f7ff;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.activation-stage {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.stage-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 16px;
+  box-sizing: border-box;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.stage-scale {
+  width: 1320px;
+  height: 1320px;
+  flex: 0 0 auto;
+}
+
+#activation-svg {
+  width: 1320px;
+  height: 1320px;
+  display: block;
+  background:
+    radial-gradient(circle at center, rgba(24, 30, 48, 0.5), rgba(3, 5, 10, 0.96)),
+    #05070c;
+  border: 1px solid rgba(130, 149, 184, 0.12);
+  border-radius: 20px;
+}
+
+.flow-line {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.34);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 2 16;
+  animation: flow 3.2s linear infinite;
+  transition: opacity 120ms ease, stroke-width 120ms ease, stroke 120ms ease;
+}
+
+.flow-line.bridge {
+  stroke: rgba(255, 240, 214, 0.58);
+  stroke-dasharray: none;
+  animation: none;
+}
+
+.flow-line.highlighted {
+  stroke: rgba(255, 255, 255, 1);
+  opacity: 1;
+}
+
+.flow-line.bridge.highlighted {
+  stroke: rgba(255, 248, 236, 1);
+}
+
+.node-circle {
+  fill: rgba(17, 23, 34, 0.95);
+  stroke: rgba(223, 235, 255, 0.24);
+  stroke-width: 1.5;
+  transition: stroke 120ms ease, stroke-width 120ms ease, filter 120ms ease;
+}
+
+.node-ring {
+  fill: none;
+  stroke: rgba(255, 108, 108, 0.9);
+  stroke-width: 3;
+}
+
+.node-label {
+  fill: rgba(243, 247, 255, 0.92);
+  font-size: 16px;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+
+.node-score {
+  fill: rgba(226, 234, 249, 0.64);
+  font-size: 11px;
+  text-anchor: middle;
+}
+
+.node-group {
+  cursor: pointer;
+}
+
+.node-group.active .node-circle {
+  stroke: rgba(255, 255, 255, 0.95);
+  stroke-width: 3;
+}
+
+@keyframes flow {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -180;
+  }
+}

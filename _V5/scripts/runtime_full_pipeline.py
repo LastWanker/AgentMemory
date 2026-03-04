@@ -10,6 +10,7 @@ if str(V3_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(V3_ROOT / "src"))
 
 from build_dataset import build_dataset
+from build_association_graph import build_association_graph
 from build_e5_cache import build_e5_cache
 from build_hybrid_index import build_hybrid_index
 from export_chat_bundle import export_chat_bundle
@@ -19,7 +20,7 @@ from agentmemory_v3.evaluation.offline_eval import EvalConfig, evaluate_offline
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="V5 coarse-only runtime pipeline.")
-    parser.add_argument("--mode", choices=("prepare", "eval", "all"), default="all")
+    parser.add_argument("--mode", choices=("prepare", "prepare_assoc", "eval", "all"), default="all")
     parser.add_argument("--config", default="_V5/configs/default.yaml")
     parser.add_argument("--memory-in", default="data/Processed/memory_followup_plus_chat.jsonl")
     parser.add_argument("--eval-in", default="data/Processed/eval_followup_plus_chat.jsonl")
@@ -36,6 +37,12 @@ def main() -> None:
             root_dir / "exports" / "chat_memory_bundle.jsonl",
         )
         print(f"[v5][runtime] coarse prepare done -> {root_dir}")
+    if args.mode in ("prepare_assoc",):
+        result = build_association_graph(args.config)
+        print(
+            f"[v5][runtime] association prepare done L1={result['l1_count']} "
+            f"L2={result['l2_count']} L3={result['l3_count']}"
+        )
     if args.mode in ("eval", "all"):
         result = evaluate_offline(
             EvalConfig(

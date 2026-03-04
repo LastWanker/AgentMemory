@@ -8,14 +8,36 @@
   </head>
   <body>
     <main class="layout">
+      <aside class="memory-panel association-panel">
+        <header class="panel-head">
+          <div>
+            <h2>联想召回</h2>
+            <p class="panel-subtitle">概念图点亮、上下溯、桥接联想</p>
+          </div>
+        </header>
+        <div class="panel-scroll side-scroll">
+          <section class="panel-block">
+            <h3>较亮节点</h3>
+            <div id="association-tags" class="tag-cloud"></div>
+          </section>
+          <section class="panel-block">
+            <h3>联想记忆 Top 5</h3>
+            <div id="association-list" class="memory-list"></div>
+          </section>
+        </div>
+      </aside>
       <section class="chat-panel">
         <header class="panel-head">
           <div>
             <h1>AgentMemory V5 Chat</h1>
             <p id="session-label">session: <span>-</span></p>
-            <p id="retrieval-label">检索模式: <span>coarse-only</span></p>
+            <p id="retrieval-label">检索模式: <span>coarse+association</span></p>
           </div>
-          <button id="new-session-btn" type="button">新会话</button>
+          <div class="head-actions">
+            <a class="secondary-link" href="/graph">图浏览</a>
+            <a class="secondary-link" href="/activation">点亮过程</a>
+            <button id="new-session-btn" type="button">新会话</button>
+          </div>
         </header>
         <div class="panel-scroll">
           <div id="messages" class="messages"></div>
@@ -24,18 +46,21 @@
           <textarea id="chat-input" rows="4" placeholder="输入问题，回车发送，Shift+Enter 换行"></textarea>
           <div class="composer-actions">
             <div class="toggle">
-              <span>V5 当前固定使用 coarse-only 检索</span>
+              <span>V5 当前固定使用 coarse + association 双链路</span>
             </div>
             <button id="send-btn" type="submit">发送</button>
           </div>
         </form>
       </section>
-      <aside class="memory-panel">
+      <aside class="memory-panel coarse-panel">
         <header class="panel-head">
-          <h2>本次参考记忆</h2>
+          <div>
+            <h2>Coarse 粗召回</h2>
+            <p class="panel-subtitle">直接候选与 cluster 扩召</p>
+          </div>
         </header>
         <div class="panel-scroll">
-          <div id="memory-list" class="memory-list"></div>
+          <div id="coarse-list" class="memory-list"></div>
         </div>
       </aside>
     </main>

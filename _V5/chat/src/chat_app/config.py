@@ -46,7 +46,8 @@ def load_config() -> ChatAppConfig:
         base_url=os.getenv("DEEPSEEK_BASE_URL", secret_env.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")).strip(),
         model=os.getenv("DEEPSEEK_MODEL", secret_env.get("DEEPSEEK_MODEL", "deepseek-chat")).strip(),
         system_prompt=(
-            "你是 V5 本地记忆助手。当前参考记忆只来自 coarse-only 检索。"
+            "你是 V5 本地记忆助手。当前参考材料可能来自两路：coarse 粗召回，以及 association 联想召回。"
+            "association 内容来自概念图的点亮、上下溯和桥接联想，不等于用户明确说过的话。"
             "优先直接回答用户问题；参考记忆相关就自然使用，不相关就忽略。"
             "不要编造未提供的事实。"
         ),

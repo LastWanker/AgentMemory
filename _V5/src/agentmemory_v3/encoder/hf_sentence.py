@@ -22,25 +22,42 @@ class SentenceEncoderConfig:
 
 class HFSentenceEncoder:
     _MODEL_CACHE: ClassVar[dict[tuple[str, str, bool], SentenceTransformer]] = {}
+    _FORCE_OFFLINE_WARNED: ClassVar[bool] = False
 
     def __init__(self, config: SentenceEncoderConfig) -> None:
-        self.config = config
-        self.device = self._resolve_device(config.device)
+        # V5 hard requirement: E5 must run local-only + offline to avoid hidden HF network waits.
+        self.config = SentenceEncoderConfig(
+            model_name=str(config.model_name),
+            use_e5_prefix=bool(config.use_e5_prefix),
+            local_files_only=True,
+            offline=True,
+            device=str(config.device),
+            batch_size=int(config.batch_size),
+        )
+        if (not bool(config.local_files_only) or not bool(config.offline)) and not self._FORCE_OFFLINE_WARNED:
+            self._FORCE_OFFLINE_WARNED = True
+            print("[v5][encoder] forcing HF local-only + offline for E5 runtime")
+        self.device = self._resolve_device(self.config.device)
         self._configure_runtime()
-        cache_key = (config.model_name, str(self.device), bool(config.local_files_only))
+        model_ref = self._resolve_model_ref(
+            self.config.model_name,
+            local_files_only=True,
+            offline=True,
+        )
+        cache_key = (str(model_ref), str(self.device), True)
         model = self._MODEL_CACHE.get(cache_key)
         if model is None:
             try:
                 model = SentenceTransformer(
-                    config.model_name,
+                    model_ref,
                     device=str(self.device),
-                    local_files_only=bool(config.local_files_only),
+                    local_files_only=True,
                 )
             except Exception as exc:
                 raise RuntimeError(
                     "HF/E5 encoder initialization failed. "
                     "V5 defaults to local-only + offline. "
-                    f"model={config.model_name} device={self.device}"
+                    f"model={self.config.model_name} resolved={model_ref} device={self.device}"
                 ) from exc
             self._MODEL_CACHE[cache_key] = model
         self.model = model
@@ -75,11 +92,9 @@ class HFSentenceEncoder:
         return raw
 
     def _configure_runtime(self) -> None:
-        if self.config.offline:
-            os.environ["HF_HUB_OFFLINE"] = "1"
-            os.environ["TRANSFORMERS_OFFLINE"] = "1"
-        if self.config.local_files_only:
-            os.environ["HF_LOCAL_FILES_ONLY"] = "1"
+        os.environ["HF_LOCAL_FILES_ONLY"] = "1" if self.config.local_files_only else "0"
+        os.environ["HF_HUB_OFFLINE"] = "1" if self.config.offline else "0"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1" if self.config.offline else "0"
 
     @staticmethod
     def _resolve_device(device: str) -> torch.device:
@@ -89,3 +104,59 @@ class HFSentenceEncoder:
         if raw == "cuda" and not torch.cuda.is_available():
             return torch.device("cpu")
         return torch.device(raw)
+
+    @staticmethod
+    def _resolve_model_ref(model_name: str, *, local_files_only: bool, offline: bool) -> str:
+        text = str(model_name or "").strip()
+        if not text:
+            return text
+        path = Path(text)
+        if path.exists():
+            return str(path)
+        if not (local_files_only or offline):
+            return text
+        cached = HFSentenceEncoder._find_cached_snapshot(text)
+        if cached:
+            return cached
+        raise RuntimeError(
+            "HF/E5 local model not found in cache while local-only/offline is enabled. "
+            f"model={text} hf_cache_dirs={HFSentenceEncoder._hf_cache_dirs()}"
+        )
+
+    @staticmethod
+    def _hf_cache_dirs() -> list[str]:
+        candidates: list[Path] = []
+        for key in ("HUGGINGFACE_HUB_CACHE", "HF_HUB_CACHE", "TRANSFORMERS_CACHE"):
+            value = str(os.getenv(key, "")).strip()
+            if value:
+                candidates.append(Path(value).expanduser())
+        hf_home = str(os.getenv("HF_HOME", "")).strip()
+        if hf_home:
+            candidates.append(Path(hf_home).expanduser() / "hub")
+        candidates.append(Path.home() / ".cache" / "huggingface" / "hub")
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in candidates:
+            text = str(item)
+            if text in seen:
+                continue
+            seen.add(text)
+            out.append(text)
+        return out
+
+    @staticmethod
+    def _find_cached_snapshot(model_name: str) -> str:
+        if "/" not in model_name:
+            return ""
+        repo_dir_name = f"models--{model_name.replace('/', '--')}"
+        for cache_dir in HFSentenceEncoder._hf_cache_dirs():
+            base = Path(cache_dir)
+            snapshots = base / repo_dir_name / "snapshots"
+            if not snapshots.exists():
+                continue
+            folders = [item for item in snapshots.iterdir() if item.is_dir()]
+            if not folders:
+                continue
+            folders.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+            return str(folders[0])
+        return ""

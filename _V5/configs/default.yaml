@@ -65,3 +65,68 @@ query:
 serving:
   host: 127.0.0.1
   port: 8891
+
+association:
+  dir: data/V5/association
+  merge_threshold: 0.96
+  max_l1_per_memory: 10
+  l2_target_min: 64
+  l2_target_max: 3000
+  l3_target_min: 16
+  l3_target_max: 500
+  label_batch_size: 256
+  bridge_top_k_per_node: 20
+  bridge_keep_ratio: 0.2
+  bridge_min_weight: 0.18
+  bridge_sem_weight: 0.3
+  bridge_co_weight: 0.7
+  progress_every: 200
+  llm_workers: 16
+  kmeans_use_minibatch: true
+  kmeans_minibatch_threshold: 12000
+  kmeans_batch_size: 2048
+  kmeans_max_iter: 120
+  kmeans_random_state: 42
+  cache_enabled: true
+  cache_dir_name: cache
+  llm_l1_cache_file: l1_extract_cache.jsonl
+  llm_parent_seed_cache_file: parent_seed_cache.jsonl
+  llm_cache_version: v1
+  passage_embedding_manifest_file: passage_embedding_manifest.json
+  passage_embedding_matrix_file: passage_embedding_matrix.npy
+  llm:
+    api_key_env: DEEPSEEK_API_KEY
+    env_file: data/_secrets/deepseek.env
+    base_url: https://api.deepseek.com/v1
+    model: deepseek-chat
+    timeout_s: 60
+    temperature: 0.1
+    allow_fallback: false
+    max_retries: 3
+    retry_backoff_s: 1.0
+    retry_max_backoff_s: 8.0
+    force_offline: false
+  retrieve:
+    seed_candidate_pool: 40
+    seed_top_k: 0
+    seed_top_k_base: 5
+    seed_top_k_cap: 12
+    string_boost_value: 0.03
+    string_boost_max_extra: 1
+    packet_ttl: 2
+    alpha_up: 0.8
+    alpha_down: 0.4
+    alpha_bridge: 0.55
+    descend_sample_ratio: 0.5
+    descend_max_children_l3: 5
+    descend_max_children_l2: 5
+    bridge_max_neighbors: 5
+    conf_sharpen_tau: 35.0
+    top_l1_for_memory: 500
+    memory_noisy_or_lambda: 0.85
+    seed_bonus: 0.03
+    bridge_bonus: 0.05
+    activation_min_score: 0.05
+    max_queue_steps: 20000
+    max_reasons_per_node: 10
+    max_memory_breakdowns: 20
