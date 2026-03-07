@@ -1,0 +1,296 @@
+计划书：反馈驱动的抑制模型（Suppressor）
+
+背景与定位
+我们不再做传统 reranker（训练去挑更相关的 topK），而是新增一个在尾部串行的小模型，只学习“用户明确给过负反馈的组合/模式”，用于在两条检索通路（粗召回/联想点亮）输出候选之后，做“扣分/压制”。
+
+它只负责减少错误出现和复读，不负责把别的候选顶上来。
+
+粗召回仍然提供精确记忆，联想通道负责扩展。
+
+Suppressor 负责“别再把我讨厌的那条推出来”。
+
+核心目标
+让模型“尖锐、几乎不误伤”：
+
+只在指定的 query 邻域里压指定的 memory
+
+不把这条 memory 全局打死
+
+不把附近相似的其它记忆一起压死
+
+允许带一点主观偏好，不追求教科书式泛化
+
+一、需要维护的数据表（最小集合）
+
+FeedbackLog（反馈日志表，追加写入）
+字段建议：
+
+feedback_id
+
+ts
+
+type: enum {unrelated, toforget}
+
+q_text
+
+q_vec（E5 向量，可离线补齐）
+
+m_id
+
+m_text_snapshot（可选，用于可追溯）
+
+m_vec（E5 向量，可离线补齐）
+
+说明：
+只要能稳定定位 (q, m) 这对即可，向量可以异步补齐，不必阻塞在线。
+
+MemoryIndex（记忆索引）
+
+m_id -> m_vec
+
+ANN 索引：用于 NN(m, k) 和 NN(q, k)
+
+会话旧账（当前阶段可替代 CandidateCache）
+
+可直接离线翻 `_V5/chat/data/conversations` 里的历史 `memory_refs`
+
+这批数据代表“当时确实展示给用户看过，但用户没有点负反馈的候选”
+
+当前阶段先靠这份旧账 + ANN 即可，不强依赖正式 CandidateCache
+
+CandidateCache（以后可补，但当前不强依赖）
+
+feedback_id -> candidate_m_ids（当时展示给用户的候选列表）
+
+备注：
+未来包装项目时再上数据库或正式缓存即可；当前先验证 suppressor 本身值不值得做。
+
+二、模型输出定义（口径必须统一）
+
+训练一个单模型：
+
+Suppressor(q, m, feedback_type) -> s in [0, 1]
+
+s 越大：越应该抑制这个 (q, m) 组合
+
+s 越小：默认不抑制
+
+上线使用先走简单口径：
+
+若 s > threshold，则对该候选乘以惩罚系数或直接扣减
+
+例如：
+final_score = base_score * (1 - alpha * s)
+
+或：
+final_score = final_score - lambda * s
+
+第一版先不用把 base_score 作为模型输入特征；只在上线时用于后处理即可。
+
+三、训练样本构造规则（按当前语义口径）
+
+通用符号
+
+_self 表示日志中这条反馈的原始对象
+
+_nb 表示“邻域集合，不包含其本身”，通过向量近邻检索得到
+
++ 表示“再混入一批随机无关样本”
+
+采样建议（默认值，可调）
+
+nb_size: 20
+
+rand_size: 20
+
+说明：
+
+NN / 候选池邻域样本是主力，用于学尖锐边界
+
+rand-rand / rand 混入样本不是主力，而是背景校准器，用于抚平黑盒内部奇怪通道，减少无关误伤
+
+A) unrelated（不相关）样本构造
+
+语义目标：
+只抑制这一对 (q_unrel_self, m_unrel_self)，不误伤“同入口不同出口”与“不同入口同出口”。
+
+Pos（应抑制）
+
+Pos: (q_unrel_self, m_unrel_self)
+
+Neg（不应抑制）
+
+Neg_out: (q_unrel_self, m_unrel_nb+)
+
+备注：
+同入口不同出口；不要因为这个 query 就把相似记忆都压了。
+
+Neg_in: (q_unrel_nb+, m_unrel_self)
+
+备注：
+不同入口同出口；不要把这条 memory 全局压死。
+
+Neg_rand: (q_rand, m_rand)
+
+备注：
+背景随机校准；防止模型内部通道长出奇怪的误伤区。
+
+q_unrel_nb 的来源
+
+可用 NN(q_unrel_self) 从历史 query 或 memory 文本中近似得到
+
+即便叫 q_unrelated_nb，来源也允许是 memory 文本或历史会话
+
+m_unrel_nb 的来源
+
+NN(m_unrel_self, nb_size)
+
+或历史会话里当时展示过但没被用户点负反馈的候选
+
+B) toforget（此处 score 表示“抑制”）
+
+语义目标：
+像这类问法时“别再联想/别再提这条”，但不要误伤它的邻居；并且“点名搜它”时不要拦。
+
+Pos（应抑制）
+
+Pos: (q_forget_nb+, m_forget_self)
+
+备注：
+多数时候不再提，尤其 query 落在这类问法邻域时，就抑制这条。
+
+Neg（不应抑制）
+
+Neg_named: (m_forget_self, m_forget_self)
+
+备注：
+近似“点名/直指这条记忆”的情况，不应抑制；保证“你盯着它搜还能搜到”。
+
+Neg_neighbors: (q_forget_nb+, m_forget_nb+)
+
+备注：
+这类问法不针对除它以外的任何个例；不要把它的语义邻居一起压。
+
+Neg_rand: (q_rand, m_rand)
+
+q_forget_nb 的来源
+
+NN(q_forget_self)
+
+或历史 query / 会话中的相近问法
+
+允许混入随机 query（+）增强一些宽容度
+
+m_forget_nb 的来源
+
+NN(m_forget_self, nb_size)，不含自身
+
+四、训练方式（简单、保守、尖锐）
+
+模型形态
+
+优先用小 MLP。
+
+当前版本明确允许：
+
+直接把 q_vec + m_vec 喂给 MLP，作为 V1
+
+再追加少量显式特征
+
+推荐输入特征：
+
+feedback_type（必须有）
+
+q_vec
+
+m_vec
+
+cos(q_vec, m_vec)
+
+lexical overlap（可选）
+
+explicit_mention_flag（可选，但强烈建议）
+
+说明：
+
+这里允许带一点过拟合，只要换来更尖锐的抑制能力。
+
+但网络宽度建议先小，不要做成大模型。
+
+推荐防过拟合手段：
+
+hidden size 保守一些
+
+dropout
+
+weight decay
+
+early stopping
+
+验证集按时间或 feedback_id 切，不要乱混
+
+损失
+
+BCE 二分类：Pos=1（该抑制），Neg=0（不该抑制）
+
+采样建议：
+
+NN / 候选池 hard negatives 占大头
+
+rand-rand 占小头，作为背景抚平器
+
+不要让随机样本比例高到把模型学成“默认全都不 suppress”
+
+训练节奏
+
+在线收集反馈，离线增量训练
+
+每天 / 每周都可以，取决于反馈量
+
+新模型先 shadow 模式跑日志对比，再上线扣分
+
+五、上线接入点（不改主排序，只做扣分）
+
+接入时机
+
+两条通路各自产出候选列表后（粗召回、联想点亮），在最终展示 / 合并前对每条候选计算 suppressor 分 s
+
+Suppressor 只负责减少两边的“讨厌项”，不做融合学习
+
+并行规则（保持产品口径）
+
+粗召回 topK 与联想 topM 仍可并列展示
+
+粗召回 topK 可从联想结果中剔除（去重）
+
+Suppressor 对两边一视同仁，只做压制，不负责重新洗牌
+
+六、评估与常见坑（写给 Codex 的提醒）
+
+1. unrelated 的关键是“双保护面”
+
+(q_self, m_nb) 与 (q_nb, m_self) 这两类 Neg 缺一不可，否则要么误伤邻居，要么全局打死 memory。
+
+2. toforget 的 Neg_named 必须存在
+
+否则模型可能把 m_self 在任何情况下都抑制掉，导致“点名也想不起来”。
+
+3. 单模型可以，但评估必须分类型看
+
+至少分开看：
+
+unrelated 的误伤率
+
+toforget 的误伤率
+
+点名查询下的保留率
+
+4. rand 样本别删，但也别喧宾夺主
+
+它们的职责是背景校准，不是主边界来源。
+
+5. 第一版不要过早复杂化
+
+先把 suppressor 作为一个可训练、可离线复盘、可 shadow 的黑盒抑制器跑通。
+
+等功能证明确实有效，再补正式 CandidateCache、数据库、更多特征、更多规则。

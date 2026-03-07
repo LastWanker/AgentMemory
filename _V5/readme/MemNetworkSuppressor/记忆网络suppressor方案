@@ -1,0 +1,45 @@
+# 记忆网络 suppressor 方案（简化统一版）
+
+更新时间：2026-03-06
+
+## 1. 核心目标
+
+1. 主链路冻结：`coarse + association` 不改。
+2. suppressor 串行后处理：可热关闭、可替换。
+3. 模型优先：减少规则加法，避免全局牵连。
+
+## 2. 拍板结论
+
+1. 不再做双头。
+2. `toforget` 与 `unrelated` 在 suppress 训练中统一处理。
+3. 使用单头 `1-hop` 记忆网络，做 `(query, memory_id) -> suppress_score`。
+
+## 3. 最小流程
+
+1. 候选召回完成后进入 suppressor。
+2. 记忆网络读取 feedback 槽位并输出单头分数。
+3. 命中阈值即硬删除，输出结果和 trace。
+
+## 4. 数据构造原则
+
+1. 正样本：反馈锚点 `(q,m)`。
+2. 负样本 1：同 `q` 的其他 `m`。
+3. 负样本 2：同 `m` 的其他 `q`。
+4. pairwise 只在同 query 组内做，不跨 query。
+
+## 5. 为什么这样更稳
+
+1. 语义统一，减少头间冲突。
+2. 一对一目标更贴近“精确地址压制”需求。
+3. 结构简单，定位问题更快。
+
+## 6. 配置面（保持收敛）
+
+1. `SUPPRESSOR_ENABLED`
+2. `SUPPRESSOR_BACKEND`
+3. `SUPPRESSOR_MEMNET_ARTIFACT_DIR`
+4. `MEMNET_SCORE_THRESHOLD`
+5. `MEMNET_MAX_DROP_PER_LANE`
+6. `MEMNET_KEEP_TOP_PER_LANE`
+
+说明：第 5、6 项仅为配置兼容保留；mem_network 硬删除模式下不再生效。

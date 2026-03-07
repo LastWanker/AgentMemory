@@ -188,6 +188,20 @@ body {
   color: #4a432f;
 }
 
+.recall-only-toggle {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid #cdbfa4;
+  background: #fff8eb;
+}
+
+.recall-only-toggle input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #715f3f;
+}
+
 button {
   border: 0;
   border-radius: 999px;
@@ -226,6 +240,48 @@ button {
   border-radius: 12px;
   padding: 12px;
   background: rgba(255, 255, 255, 0.95);
+}
+
+.memory-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.memory-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.feedback-btn {
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 999px;
+  background: #f7f2e6;
+  color: #5f5032;
+  border: 1px solid #cfc2a8;
+}
+
+.feedback-btn.unrelated {
+  background: #f5efe7;
+  color: #7b5636;
+}
+
+.feedback-btn.forget {
+  background: #eef1e8;
+  color: #516244;
+}
+
+.feedback-btn.selected,
+.feedback-btn:disabled {
+  background: #d8d6cf;
+  color: #7b7870;
+  border-color: #c1bdb4;
+  cursor: not-allowed;
 }
 
 .memory-card.pending {

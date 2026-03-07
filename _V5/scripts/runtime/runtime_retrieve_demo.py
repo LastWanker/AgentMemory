@@ -1,0 +1,33 @@
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+
+V3_ROOT = Path(__file__).resolve().parents[1]
+if str(V3_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(V3_ROOT / "src"))
+
+from agentmemory_v3.retrieval.hybrid_retriever import HybridRetriever
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run one coarse-only retrieval query against V5.")
+    parser.add_argument("--config", default="_V5/configs/default.yaml")
+    parser.add_argument("--query", nargs="+", required=True)
+    parser.add_argument("--top-k", type=int, default=5)
+    args = parser.parse_args()
+
+    retriever = HybridRetriever.from_config(args.config)
+    query_text = " ".join(args.query).strip()
+    hits, trace = retriever.retrieve(query_text, args.top_k)
+    print("[v5][retrieve] mode: coarse-only")
+    print("[v5][retrieve] trace:", trace)
+    for idx, hit in enumerate(hits, start=1):
+        print(f"[{idx}] {hit.memory_id} | cluster={hit.cluster_id} | score={hit.score:.4f} | source={hit.source}")
+        print(hit.display_text)
+
+
+if __name__ == "__main__":
+    main()

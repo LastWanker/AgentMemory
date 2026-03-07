@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+from threading import Lock
 from typing import List
+from uuid import uuid4
 
 from .config import ChatAppConfig
 from .deepseek_client import DeepSeekChatClient
-from .models import ChatResponse, ChatTurn, MemoryRef
-from .retriever_adapter import RetrieverAdapter
+from .feedback_store import FeedbackStore
+from .models import ChatResponse, ChatRetrieveResponse, ChatTurn, MemoryRef
+from .retriever_adapter import RetrievalBundle, RetrieverAdapter
 from .session_store import SessionStore
 
 
@@ -13,8 +17,12 @@ class ChatService:
     def __init__(self, config: ChatAppConfig) -> None:
         self._config = config
         self._store = SessionStore(config.data_dir)
+        self._feedback = FeedbackStore(config.feedback_dir)
         self._retriever = RetrieverAdapter(config)
         self._client = DeepSeekChatClient(config)
+        self._pending_retrievals: dict[str, dict] = {}
+        self._pending_lock = Lock()
+        self._pending_ttl = timedelta(minutes=15)
 
     def new_session(self) -> str:
         return self._store.new_session_id()
@@ -27,10 +35,25 @@ class ChatService:
         session_id: str | None,
         text: str,
         top_k: int | None = None,
+        memory_preference_enabled: bool | None = None,
     ) -> ChatResponse:
+        retrieval = self.chat_retrieve(session_id, text, top_k, memory_preference_enabled)
+        return self.chat_respond(retrieval.session_id, retrieval.retrieval_id)
+
+    def chat_retrieve(
+        self,
+        session_id: str | None,
+        text: str,
+        top_k: int | None = None,
+        memory_preference_enabled: bool | None = None,
+    ) -> ChatRetrieveResponse:
         real_session_id = session_id or self.new_session()
         history = self._store.load_history(real_session_id)
-        retrieval = self._retriever.retrieve_bundle(text, top_k or self._config.top_k)
+        retrieval = self._retriever.retrieve_bundle(
+            text,
+            top_k or self._config.top_k,
+            memory_preference_enabled=memory_preference_enabled,
+        )
         prompt_messages = self._build_messages(
             history,
             text,
@@ -38,43 +61,177 @@ class ChatService:
             association_refs=retrieval.association_refs,
             association_tags=retrieval.association_tags,
         )
-        reply = self._client.chat(prompt_messages)
         retrieval_label = retrieval.retrieval_label
+        retrieval_id = self._put_pending_retrieval(
+            session_id=real_session_id,
+            text=text,
+            retrieval=retrieval,
+            prompt_messages=prompt_messages,
+        )
         self._store.append_turn(
             real_session_id,
             role="user",
             content=text,
-            metadata={"source": "ui", "retrieval_label": retrieval_label},
+            metadata={
+                "source": "ui",
+                "retrieval_label": retrieval_label,
+                "memory_preference_enabled": (
+                    bool(memory_preference_enabled) if memory_preference_enabled is not None else None
+                ),
+            },
         )
         self._store.append_turn(
             real_session_id,
             role="assistant",
-            content=reply,
+            content="记忆已召回",
             memory_refs=retrieval.coarse_refs,
             metadata={
-                "model": self._config.model,
-                "retrieval_mode": self._config.retrieval_mode,
+                "stage": "retrieval_ready",
                 "retrieval_label": retrieval_label,
                 "reference_count": len(retrieval.coarse_refs) + len(retrieval.association_refs),
                 "coarse_reference_count": len(retrieval.coarse_refs),
                 "association_reference_count": len(retrieval.association_refs),
                 "association_tags": retrieval.association_tags,
                 "association_trace": retrieval.association_trace,
-                "prompt_message_count": len(prompt_messages),
+                "coarse_memory_refs": [ref.model_dump() for ref in retrieval.coarse_refs],
+                "association_memory_refs": [ref.model_dump() for ref in retrieval.association_refs],
+                "suppressor_trace": retrieval.suppressor_trace,
+                "retrieval_id": retrieval_id,
+                "memory_preference_enabled": (
+                    bool(memory_preference_enabled) if memory_preference_enabled is not None else None
+                ),
             },
         )
         final_history = self._store.load_history(real_session_id)
-        return ChatResponse(
+        return ChatRetrieveResponse(
             session_id=real_session_id,
+            retrieval_id=retrieval_id,
+            reply="记忆已召回",
+            memory_refs=retrieval.coarse_refs,
+            coarse_memory_refs=retrieval.coarse_refs,
+            association_memory_refs=retrieval.association_refs,
+            association_tags=retrieval.association_tags,
+            association_trace=retrieval.association_trace,
+            suppressor_trace=retrieval.suppressor_trace,
+            history=final_history,
+            retrieval_label=retrieval_label,
+        )
+
+    def chat_respond(self, session_id: str, retrieval_id: str) -> ChatResponse:
+        pending = self._get_pending_retrieval(retrieval_id)
+        if pending is None:
+            raise KeyError("retrieval_id not found or expired")
+        if str(pending["session_id"]) != str(session_id):
+            raise KeyError("retrieval_id does not belong to this session")
+        prompt_messages = list(pending["prompt_messages"])
+        retrieval = pending["retrieval"]
+        reply = self._client.chat(prompt_messages)
+        self._store.append_turn(
+            session_id,
+            role="assistant",
+            content=reply,
+            memory_refs=retrieval.coarse_refs,
+            metadata={
+                "stage": "llm_reply",
+                "model": self._config.model,
+                "retrieval_mode": self._config.retrieval_mode,
+                "retrieval_label": retrieval.retrieval_label,
+                "reference_count": len(retrieval.coarse_refs) + len(retrieval.association_refs),
+                "coarse_reference_count": len(retrieval.coarse_refs),
+                "association_reference_count": len(retrieval.association_refs),
+                "association_tags": retrieval.association_tags,
+                "association_trace": retrieval.association_trace,
+                "coarse_memory_refs": [ref.model_dump() for ref in retrieval.coarse_refs],
+                "association_memory_refs": [ref.model_dump() for ref in retrieval.association_refs],
+                "suppressor_trace": retrieval.suppressor_trace,
+                "prompt_message_count": len(prompt_messages),
+                "retrieval_id": retrieval_id,
+            },
+        )
+        self._pop_pending_retrieval(retrieval_id)
+        final_history = self._store.load_history(session_id)
+        return ChatResponse(
+            session_id=session_id,
+            retrieval_id=retrieval_id,
             reply=reply,
             memory_refs=retrieval.coarse_refs,
             coarse_memory_refs=retrieval.coarse_refs,
             association_memory_refs=retrieval.association_refs,
             association_tags=retrieval.association_tags,
             association_trace=retrieval.association_trace,
+            suppressor_trace=retrieval.suppressor_trace,
             history=final_history,
-            retrieval_label=retrieval_label,
+            retrieval_label=retrieval.retrieval_label,
         )
+
+    def record_feedback(
+        self,
+        *,
+        session_id: str,
+        query_text: str,
+        memory_id: str,
+        feedback_type: str,
+        lane: str,
+        candidate_refs: list[dict],
+    ) -> dict:
+        row = self._feedback.append_feedback(
+            session_id=session_id,
+            query_text=query_text,
+            memory_id=memory_id,
+            feedback_type=feedback_type,
+            lane=lane,
+            candidate_refs=candidate_refs,
+        )
+        selected = self._feedback.selected_feedback_for_query(session_id=session_id, query_text=query_text)
+        return {
+            "ok": True,
+            "feedback_id": str(row.get("feedback_id") or ""),
+            "selected_feedback": selected,
+            "stored_row": row,
+        }
+
+    def _put_pending_retrieval(
+        self,
+        *,
+        session_id: str,
+        text: str,
+        retrieval: RetrievalBundle,
+        prompt_messages: list[dict],
+    ) -> str:
+        retrieval_id = uuid4().hex
+        now = datetime.now(timezone.utc)
+        payload = {
+            "session_id": session_id,
+            "text": text,
+            "retrieval": retrieval,
+            "prompt_messages": prompt_messages,
+            "created_at": now,
+        }
+        with self._pending_lock:
+            self._purge_expired_pending_locked(now)
+            self._pending_retrievals[retrieval_id] = payload
+        return retrieval_id
+
+    def _get_pending_retrieval(self, retrieval_id: str) -> dict | None:
+        with self._pending_lock:
+            self._purge_expired_pending_locked(datetime.now(timezone.utc))
+            payload = self._pending_retrievals.get(retrieval_id)
+            if payload is None:
+                return None
+            return dict(payload)
+
+    def _pop_pending_retrieval(self, retrieval_id: str) -> None:
+        with self._pending_lock:
+            self._pending_retrievals.pop(retrieval_id, None)
+
+    def _purge_expired_pending_locked(self, now: datetime) -> None:
+        expired = [
+            retrieval_id
+            for retrieval_id, payload in self._pending_retrievals.items()
+            if now - payload.get("created_at", now) > self._pending_ttl
+        ]
+        for retrieval_id in expired:
+            self._pending_retrievals.pop(retrieval_id, None)
 
     def _build_messages(
         self,

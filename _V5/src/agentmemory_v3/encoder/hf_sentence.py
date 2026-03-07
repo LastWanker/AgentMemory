@@ -48,11 +48,19 @@ class HFSentenceEncoder:
         model = self._MODEL_CACHE.get(cache_key)
         if model is None:
             try:
-                model = SentenceTransformer(
-                    model_ref,
-                    device=str(self.device),
-                    local_files_only=True,
-                )
+                try:
+                    model = SentenceTransformer(
+                        model_ref,
+                        device=str(self.device),
+                        local_files_only=True,
+                    )
+                except TypeError:
+                    # Older sentence-transformers releases do not expose local_files_only.
+                    # Offline behavior is still enforced through HF_* env vars above.
+                    model = SentenceTransformer(
+                        model_ref,
+                        device=str(self.device),
+                    )
             except Exception as exc:
                 raise RuntimeError(
                     "HF/E5 encoder initialization failed. "

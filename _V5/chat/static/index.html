@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AgentMemory V5 Chat</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=feedback2" />
   </head>
   <body>
     <main class="layout">
@@ -45,9 +45,14 @@
         <form id="chat-form" class="composer">
           <textarea id="chat-input" rows="4" placeholder="输入问题，回车发送，Shift+Enter 换行"></textarea>
           <div class="composer-actions">
-            <div class="toggle">
-              <span>V5 当前固定使用 coarse + association 双链路</span>
-            </div>
+            <label class="toggle recall-only-toggle" for="retrieval-only-toggle">
+              <input id="retrieval-only-toggle" type="checkbox" />
+              <span>仅召回模式</span>
+            </label>
+            <label class="toggle recall-only-toggle" for="memory-preference-toggle">
+              <input id="memory-preference-toggle" type="checkbox" checked />
+              <span>记忆偏好</span>
+            </label>
             <button id="send-btn" type="submit">发送</button>
           </div>
         </form>
@@ -64,6 +69,6 @@
         </div>
       </aside>
     </main>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=feedback3"></script>
   </body>
-  </html>
+</html>

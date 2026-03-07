@@ -15,7 +15,16 @@ if str(PROJECT_SRC) not in sys.path:
 from agentmemory_v3.association import AssociationGraphView
 
 from .config import load_config
-from .models import ChatRequest, ChatResponse, SessionResponse
+from .models import (
+    ChatRequest,
+    ChatRespondRequest,
+    ChatResponse,
+    ChatRetrieveRequest,
+    ChatRetrieveResponse,
+    FeedbackRequest,
+    FeedbackResponse,
+    SessionResponse,
+)
 from .service import ChatService
 
 
@@ -74,8 +83,61 @@ def create_app() -> FastAPI:
         if not request.text.strip():
             raise HTTPException(status_code=400, detail="text is empty")
         try:
-            return service.chat(request.session_id, request.text.strip(), request.top_k)
+            return service.chat(
+                request.session_id,
+                request.text.strip(),
+                request.top_k,
+                request.memory_preference_enabled,
+            )
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/chat/retrieve", response_model=ChatRetrieveResponse)
+    def chat_retrieve(request: ChatRetrieveRequest) -> ChatRetrieveResponse:
+        if not request.text.strip():
+            raise HTTPException(status_code=400, detail="text is empty")
+        try:
+            return service.chat_retrieve(
+                request.session_id,
+                request.text.strip(),
+                request.top_k,
+                request.memory_preference_enabled,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/chat/respond", response_model=ChatResponse)
+    def chat_respond(request: ChatRespondRequest) -> ChatResponse:
+        if not request.session_id.strip():
+            raise HTTPException(status_code=400, detail="session_id is empty")
+        if not request.retrieval_id.strip():
+            raise HTTPException(status_code=400, detail="retrieval_id is empty")
+        try:
+            return service.chat_respond(request.session_id.strip(), request.retrieval_id.strip())
+        except KeyError as exc:
+            raise HTTPException(status_code=410, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/feedback", response_model=FeedbackResponse)
+    def feedback(request: FeedbackRequest) -> FeedbackResponse:
+        if not request.session_id.strip():
+            raise HTTPException(status_code=400, detail="session_id is empty")
+        if not request.query_text.strip():
+            raise HTTPException(status_code=400, detail="query_text is empty")
+        if not request.memory_id.strip():
+            raise HTTPException(status_code=400, detail="memory_id is empty")
+        feedback_type = request.feedback_type.strip().lower()
+        if feedback_type not in {"unrelated", "toforget"}:
+            raise HTTPException(status_code=400, detail="feedback_type must be unrelated or toforget")
+        payload = service.record_feedback(
+            session_id=request.session_id.strip(),
+            query_text=request.query_text.strip(),
+            memory_id=request.memory_id.strip(),
+            feedback_type=feedback_type,
+            lane=request.lane.strip(),
+            candidate_refs=[item.model_dump() for item in request.candidate_refs],
+        )
+        return FeedbackResponse.model_validate(payload)
 
     return app

@@ -11,6 +11,7 @@ import httpx
 
 from .config import ChatAppConfig
 from .models import MemoryRef
+from .suppressor_adapter import SuppressorAdapter
 
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]")
@@ -22,6 +23,7 @@ class RetrievalBundle:
     association_refs: list[MemoryRef]
     association_tags: list[dict]
     association_trace: dict
+    suppressor_trace: dict
     retrieval_label: str
 
 
@@ -45,19 +47,35 @@ class RetrieverAdapter:
         self._config = config
         self._local_coarse_retriever = None
         self._local_association_retriever = None
+        self._suppressor = SuppressorAdapter(config)
 
     def retrieve(self, query: str, top_k: int) -> List[MemoryRef]:
         return self.retrieve_bundle(query, top_k).coarse_refs
 
-    def retrieve_bundle(self, query: str, top_k: int) -> RetrievalBundle:
-        coarse_refs = self._retrieve_coarse(query, top_k)
+    def retrieve_bundle(
+        self,
+        query: str,
+        top_k: int,
+        *,
+        memory_preference_enabled: bool | None = None,
+    ) -> RetrievalBundle:
+        suppressor_enabled = (
+            bool(self._config.suppressor_enabled)
+            if memory_preference_enabled is None
+            else bool(memory_preference_enabled)
+        )
+        fetch_top_k = int(top_k) + (
+            int(self._config.suppressor_extra_candidates) if suppressor_enabled else 0
+        )
+        fetch_top_k = max(1, fetch_top_k)
+        coarse_refs = self._retrieve_coarse(query, fetch_top_k)
         association_refs: list[MemoryRef] = []
         association_trace: dict = {}
         association_tags: list[dict] = []
         try:
             association_refs, association_trace = self._retrieve_association(
                 query,
-                top_k=top_k,
+                top_k=fetch_top_k,
                 exclude_memory_ids={ref.memory_id for ref in coarse_refs},
             )
             association_tags = self._extract_association_tags(association_trace)
@@ -65,12 +83,40 @@ class RetrieverAdapter:
             association_refs = []
             association_trace = {}
             association_tags = []
+        coarse_refs, coarse_suppress_trace = self._suppressor.apply(
+            query,
+            "coarse",
+            coarse_refs,
+            enabled_override=memory_preference_enabled,
+        )
+        association_refs, association_suppress_trace = self._suppressor.apply(
+            query,
+            "association",
+            association_refs,
+            enabled_override=memory_preference_enabled,
+        )
+        suppressor_trace = {
+            "enabled": suppressor_enabled,
+            "override": memory_preference_enabled,
+            "fetch_top_k": int(fetch_top_k),
+            "output_top_k": int(top_k),
+            "backend": str((coarse_suppress_trace or {}).get("backend") or (association_suppress_trace or {}).get("backend") or ""),
+            "lanes": {
+                "coarse": coarse_suppress_trace,
+                "association": association_suppress_trace,
+            },
+        }
+        coarse_refs = coarse_refs[: max(1, int(top_k))]
+        association_refs = association_refs[: max(1, int(top_k))]
         retrieval_label = "coarse+association" if association_refs or association_tags else "coarse-only"
+        if any(int((lane or {}).get("applied_count", 0)) > 0 for lane in suppressor_trace["lanes"].values()):
+            retrieval_label += "+suppressor"
         return RetrievalBundle(
             coarse_refs=coarse_refs,
             association_refs=association_refs,
             association_tags=association_tags,
             association_trace=association_trace,
+            suppressor_trace=suppressor_trace,
             retrieval_label=retrieval_label,
         )
 
@@ -97,7 +143,13 @@ class RetrieverAdapter:
             resp.raise_for_status()
         payload = resp.json()
         hits = payload.get("hits", [])
-        return [MemoryRef.model_validate(hit) for hit in hits]
+        out: list[MemoryRef] = []
+        for hit in hits:
+            ref = MemoryRef.model_validate(hit)
+            if float(ref.base_score) == 0.0 and float(ref.score) != 0.0:
+                ref.base_score = float(ref.score)
+            out.append(ref)
+        return out
 
     def _retrieve_bundle_fallback(self, query: str, top_k: int) -> List[MemoryRef]:
         bundle_path = self._config.retrieval_bundle
@@ -117,6 +169,7 @@ class RetrieverAdapter:
                         memory_id=str(row.get("memory_id") or ""),
                         cluster_id=str(row.get("cluster_id") or ""),
                         score=float(score),
+                        base_score=float(score),
                         source="bundle_fallback_coarse",
                         display_text=display_text,
                     ),
@@ -133,6 +186,7 @@ class RetrieverAdapter:
                 memory_id=hit.memory_id,
                 cluster_id=hit.cluster_id,
                 score=hit.score,
+                base_score=hit.score,
                 source=f"local_v5:{hit.source}",
                 display_text=hit.display_text,
             )
@@ -153,6 +207,7 @@ class RetrieverAdapter:
                 memory_id=hit.memory_id,
                 cluster_id=hit.cluster_id,
                 score=hit.score,
+                base_score=hit.score,
                 source=f"local_v5:{hit.source}",
                 display_text=hit.display_text,
             )

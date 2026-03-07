@@ -1,7 +1,12 @@
 let currentSessionId = null;
 let currentHistory = [];
-let pendingAssistantTimer = null;
 let currentRetrievalLabel = "coarse+association";
+let currentQueryText = "";
+let currentFeedbackSelections = {};
+let currentCandidateRefs = [];
+let currentCoarseRefs = [];
+let currentAssociationRefs = [];
+let currentAssociationTags = [];
 
 const ACTIVATION_STORAGE_KEY = "agentmemory_v5_latest_activation";
 
@@ -10,6 +15,12 @@ async function createSession() {
   const data = await resp.json();
   currentSessionId = data.session_id;
   currentHistory = [];
+  currentQueryText = "";
+  currentFeedbackSelections = {};
+  currentCandidateRefs = [];
+  currentCoarseRefs = [];
+  currentAssociationRefs = [];
+  currentAssociationTags = [];
   updateRetrievalLabel("coarse+association");
   updateSessionLabel();
   renderMessages(currentHistory);
@@ -52,13 +63,61 @@ function renderMessages(history) {
   root.scrollTop = root.scrollHeight;
 }
 
-function renderMemoryCards(rootId, memoryRefs, pendingText = "", variant = "") {
+function collectCurrentCandidateRefs(coarseRefs, associationRefs) {
+  const rows = [];
+  (associationRefs || []).forEach((ref) => {
+    rows.push({ ...ref, lane: "association" });
+  });
+  (coarseRefs || []).forEach((ref) => {
+    rows.push({ ...ref, lane: "coarse" });
+  });
+  currentCandidateRefs = rows;
+}
+
+function rerenderPanels() {
+  renderAssociationPanel(currentAssociationRefs, currentAssociationTags);
+  renderCoarsePanel(currentCoarseRefs);
+}
+
+async function submitFeedback(ref, lane, feedbackType) {
+  if (!currentSessionId || !currentQueryText || !ref || !ref.memory_id) {
+    return;
+  }
+  const key = `${lane}|${ref.memory_id}`;
+  if (currentFeedbackSelections[key]) {
+    return;
+  }
+  const resp = await fetch("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: currentSessionId,
+      query_text: currentQueryText,
+      memory_id: ref.memory_id,
+      feedback_type: feedbackType,
+      lane,
+      candidate_refs: currentCandidateRefs,
+    }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error(data.detail || "feedback failed");
+  }
+  const selected = data.selected_feedback || {};
+  Object.entries(selected).forEach(([memoryId, selectedType]) => {
+    currentFeedbackSelections[`coarse|${memoryId}`] = selectedType;
+    currentFeedbackSelections[`association|${memoryId}`] = selectedType;
+  });
+  rerenderPanels();
+}
+
+function renderMemoryCards(rootId, memoryRefs, pendingText = "", variant = "", lane = "") {
   const root = document.getElementById(rootId);
   root.innerHTML = "";
   if (pendingText) {
     const card = document.createElement("article");
     card.className = "memory-card pending";
-    card.innerHTML = `<h3>正在处理</h3><div class="memory-meta">${pendingText}</div>`;
+    card.innerHTML = `<h3>正在处理中</h3><div class="memory-meta">${pendingText}</div>`;
     root.appendChild(card);
     return;
   }
@@ -69,14 +128,47 @@ function renderMemoryCards(rootId, memoryRefs, pendingText = "", variant = "") {
   memoryRefs.forEach((ref, idx) => {
     const card = document.createElement("article");
     card.className = `memory-card ${variant}`.trim();
+    const header = document.createElement("div");
+    header.className = "memory-card-head";
     const title = document.createElement("h3");
     title.textContent = `M${idx + 1} | ${ref.memory_id}`;
+    const actions = document.createElement("div");
+    actions.className = "memory-actions";
+    const selectedType = currentFeedbackSelections[`${lane}|${ref.memory_id}`];
+    const unrelatedBtn = document.createElement("button");
+    unrelatedBtn.type = "button";
+    unrelatedBtn.className = `feedback-btn unrelated${selectedType ? " selected" : ""}`;
+    unrelatedBtn.textContent = selectedType === "unrelated" ? "已标无关" : "无关";
+    unrelatedBtn.disabled = Boolean(selectedType);
+    unrelatedBtn.addEventListener("click", async () => {
+      try {
+        await submitFeedback(ref, lane, "unrelated");
+      } catch (err) {
+        alert(err.message || "反馈失败");
+      }
+    });
+    const forgetBtn = document.createElement("button");
+    forgetBtn.type = "button";
+    forgetBtn.className = `feedback-btn forget${selectedType ? " selected" : ""}`;
+    forgetBtn.textContent = selectedType === "toforget" ? "已标遗忘" : "遗忘";
+    forgetBtn.disabled = Boolean(selectedType);
+    forgetBtn.addEventListener("click", async () => {
+      try {
+        await submitFeedback(ref, lane, "toforget");
+      } catch (err) {
+        alert(err.message || "反馈失败");
+      }
+    });
+    actions.appendChild(unrelatedBtn);
+    actions.appendChild(forgetBtn);
+    header.appendChild(title);
+    header.appendChild(actions);
     const meta = document.createElement("div");
     meta.className = "memory-meta";
     meta.textContent = `cluster=${ref.cluster_id || "-"} | source=${ref.source || "-"} | score=${Number(ref.score || 0).toFixed(3)}`;
     const text = document.createElement("p");
     text.textContent = ref.display_text || "";
-    card.appendChild(title);
+    card.appendChild(header);
     card.appendChild(meta);
     card.appendChild(text);
     root.appendChild(card);
@@ -104,68 +196,112 @@ function renderAssociationTags(tags) {
 
 function renderAssociationPanel(memoryRefs, tags, pendingText = "") {
   renderAssociationTags(pendingText ? [] : tags);
-  renderMemoryCards("association-list", memoryRefs, pendingText, "association-card");
+  renderMemoryCards("association-list", memoryRefs, pendingText, "association-card", "association");
 }
 
 function renderCoarsePanel(memoryRefs, pendingText = "") {
-  renderMemoryCards("coarse-list", memoryRefs, pendingText);
+  renderMemoryCards("coarse-list", memoryRefs, pendingText, "", "coarse");
 }
 
 function persistActivationTrace(trace) {
   try {
     localStorage.setItem(ACTIVATION_STORAGE_KEY, JSON.stringify(trace || {}));
   } catch (_err) {
-    // Ignore storage failures; the main chat page can still work without the trace page.
+    // ignore storage failures
   }
+}
+
+function applyChatPayload(data, text) {
+  currentSessionId = data.session_id;
+  updateSessionLabel();
+  updateRetrievalLabel(data.retrieval_label || "coarse+association");
+  currentHistory = data.history || [];
+  currentQueryText = text;
+  currentCoarseRefs = data.coarse_memory_refs || data.memory_refs || [];
+  currentAssociationRefs = data.association_memory_refs || [];
+  currentAssociationTags = data.association_tags || [];
+  renderMessages(currentHistory);
+  collectCurrentCandidateRefs(currentCoarseRefs, currentAssociationRefs);
+  rerenderPanels();
+  persistActivationTrace(data.association_trace || {});
+}
+
+async function requestRetrieve(text, memoryPreferenceEnabled) {
+  const resp = await fetch("/api/chat/retrieve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: currentSessionId,
+      text,
+      memory_preference_enabled: Boolean(memoryPreferenceEnabled),
+    }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error(data.detail || "retrieve failed");
+  }
+  return data;
+}
+
+async function requestRespond(sessionId, retrievalId) {
+  const resp = await fetch("/api/chat/respond", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, retrieval_id: retrievalId }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error(data.detail || "respond failed");
+  }
+  return data;
 }
 
 async function sendMessage(text) {
   const retrievalLabel = "coarse+association";
+  const retrievalOnly = Boolean(document.getElementById("retrieval-only-toggle")?.checked);
+  const memoryPreferenceEnabled = Boolean(document.getElementById("memory-preference-toggle")?.checked);
+  currentQueryText = text;
+  currentFeedbackSelections = {};
+  currentCandidateRefs = [];
+  currentCoarseRefs = [];
+  currentAssociationRefs = [];
+  currentAssociationTags = [];
   updateRetrievalLabel(retrievalLabel);
-  const pendingAssistant = {
-    role: "assistant",
-    content: "正在回忆…",
-    pending: true,
-    status: `正在回忆… (${retrievalLabel})`,
-  };
-  currentHistory = [...currentHistory, { role: "user", content: text }, pendingAssistant];
+
+  currentHistory = [
+    ...currentHistory,
+    { role: "user", content: text },
+    {
+      role: "assistant",
+      content: "正在召回记忆…",
+      pending: true,
+      status: `正在召回记忆…(${retrievalLabel})`,
+    },
+  ];
   renderMessages(currentHistory);
-  renderAssociationPanel([], [], `模式=${retrievalLabel} | 正在点亮联想图并回忆关联记忆…`);
+  renderAssociationPanel([], [], `模式=${retrievalLabel} | 正在点亮联想图并召回关联记忆…`);
   renderCoarsePanel([], `模式=${retrievalLabel} | 正在准备 coarse 参考记忆…`);
-  if (pendingAssistantTimer) {
-    clearTimeout(pendingAssistantTimer);
+
+  const retrievalData = await requestRetrieve(text, memoryPreferenceEnabled);
+  applyChatPayload(retrievalData, text);
+  const retrievalId = retrievalData.retrieval_id || "";
+  if (retrievalOnly || !retrievalId) {
+    return;
   }
-  pendingAssistantTimer = setTimeout(() => {
-    const last = currentHistory[currentHistory.length - 1];
-    if (last && last.pending) {
-      last.status = `正在生成回复… (${retrievalLabel})`;
-      last.content = "正在生成回复…";
-      renderMessages(currentHistory);
-      renderAssociationPanel([], [], `模式=${retrievalLabel} | 联想已点亮，正在生成回复…`);
-      renderCoarsePanel([], `模式=${retrievalLabel} | coarse 参考已准备，正在生成回复…`);
-    }
-  }, 700);
-  const resp = await fetch("/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: currentSessionId, text }),
-  });
-  const data = await resp.json();
-  if (pendingAssistantTimer) {
-    clearTimeout(pendingAssistantTimer);
-    pendingAssistantTimer = null;
-  }
-  if (!resp.ok) {
-    throw new Error(data.detail || "request failed");
-  }
-  currentSessionId = data.session_id;
-  updateSessionLabel();
-  updateRetrievalLabel(data.retrieval_label || retrievalLabel);
-  currentHistory = data.history || [];
+
+  currentHistory = [
+    ...currentHistory,
+    {
+      role: "assistant",
+      content: "正在生成回复…",
+      pending: true,
+      status: `正在生成回复…(${currentRetrievalLabel})`,
+    },
+  ];
   renderMessages(currentHistory);
-  renderAssociationPanel(data.association_memory_refs || [], data.association_tags || []);
-  renderCoarsePanel(data.coarse_memory_refs || data.memory_refs || []);
-  persistActivationTrace(data.association_trace || {});
+
+  const responseData = await requestRespond(currentSessionId, retrievalId);
+  applyChatPayload(responseData, text);
 }
 
 document.getElementById("new-session-btn").addEventListener("click", async () => {
@@ -181,14 +317,9 @@ document.getElementById("chat-form").addEventListener("submit", async (event) =>
   try {
     await sendMessage(text);
   } catch (err) {
-    if (pendingAssistantTimer) {
-      clearTimeout(pendingAssistantTimer);
-      pendingAssistantTimer = null;
-    }
     currentHistory = currentHistory.filter((turn) => !turn.pending);
     renderMessages(currentHistory);
-    renderAssociationPanel([], []);
-    renderCoarsePanel([]);
+    rerenderPanels();
     alert(err.message || "发送失败");
   }
 });
