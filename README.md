@@ -1,53 +1,113 @@
-# AgentMemory（工程现状快照）
+# AgentMemory V5
 
-更新时间：2026-02-26
+面向聊天记忆检索的 V5 工程主线。当前仓库以 `_V5/` 为默认开发与运行入口，`_V3/`、`_V4/` 仅作为历史版本留档。
 
-这是一个“聊天记忆构建 + 检索路由评测/训练”的工程化仓库，当前重点是：
-- 把聊天导出数据整理成 `memory_*.jsonl / eval_*.jsonl`
-- 在统一候选池口径下做路由检索评测
-- 用 pairwise/listwise 训练 tiny reranker 并沉淀 run 产物
+## 项目简介
 
-## 当前主模块
-- `src/chat_memory_processor/`：聊天数据抽取、清洗、会话切分、跨会话聚类、identity/supplemental query 构建
-- `src/memory_indexer/`：记忆切块、向量化建库、粗召回、词法证据、语义精排、路由融合
-- `scripts/memory_processer/`：聊天侧数据生产与 runtime 封装
-- `scripts/memory_indexer/`：评测、训练、数据集合并、run 管理脚本
+AgentMemory V5 面向大模型多轮对话中的“短记忆”问题，构建可持续增量更新的长期记忆模块，使系统能够跨会话理解并召回用户历史语义，形成完整的个人记忆数据链路。
 
-## 当前推荐入口（命令行）
-- 生成聊天 memory：
-```bash
-python -m scripts.memory_processer.build_chat_memory --config configs/chat_memory.yaml
+系统采用双通路检索架构：`coarse` 主通路（E5 dense + BM25 + cluster 连带）负责高精度召回；`association` 联想通路基于语义关联扩散，补足抽象概念和语义跳跃场景。联想能力通过分层概念图激活机制实现，以节点点亮和 bridge 扩散完成检索，同时输出 activation trace 提升可解释性。
+
+工程侧基于 FastAPI 提供检索 API，形成“检索 -> 组装 -> 生成”的 RAG 工作流，并配套反馈学习机制与 Web 可视化。数据侧支持聊天记录导入、清洗、切分、聚类与结构化，统一沉淀为 `memory/query/cluster` 数据契约。
+
+## 指标快照
+
+- 数据规模：3728 条 memory
+- 测试规模：489 条 query
+- coarse 通路：Recall@N = 0.83
+- association 通路：在抽象概念与语义跳跃场景补充召回，增强“抽象输入 -> 具体记忆”联想检索能力
+
+## 项目定位
+
+V5 的目标是维护一条稳定、可复现、可评测的检索主链：
+
+- 检索主链：`E5 dense + BM25 + cluster 连带扩召（coarse-only）`
+- 数据主链：外部数据规范化后沉淀到 `data/V5/processed/`
+- 评测主链：离线评测结果统一落盘到 `_V5/runs/eval_offline/`
+- 服务主链：本地 retriever 服务 + V5 聊天前端
+
+## V5 架构概览
+
+1. 数据准备：`build_dataset.py` 将标准输入转为 `memory/query/cluster` 三份 V5 数据集。
+2. 表征与索引：`build_e5_cache.py` + `build_hybrid_index.py` 生成向量缓存与混合索引。
+3. 检索与评测：`runtime_retrieve_demo.py` / `eval_offline.py` 进行检索验证与指标评估。
+4. 服务与交互：`serve_retriever.py` 提供 API，`_V5/chat/` 提供本地聊天界面。
+5. 扩展模块：`association`（联想图谱）与 `suppressor`（候选抑制）作为可选增强层。
+
+## 目录结构（V5）
+
+- `_V5/src/agentmemory_v3/`：V5 核心实现（retrieval、association、suppressor、serving）
+- `_V5/scripts/`：V5 脚本入口（ingest、runtime、quality、suppressor）
+- `_V5/configs/default.yaml`：V5 默认配置
+- `_V5/chat/`：本地聊天应用（FastAPI + 静态前端）
+- `data/V5/`：V5 数据资产目录（processed、indexes、VectorCacheV5、exports、association）
+- `_V5/runs/`：V5 评测与实验输出
+
+## 快速开始
+
+### 1) 基础准备
+
+- 建议使用仓库现有虚拟环境：`.venv`
+- 默认配置：`_V5/configs/default.yaml`
+- 如需聊天与联想相关能力，准备 `data/_secrets/deepseek.env`（`DEEPSEEK_API_KEY` 等）
+
+### 2) 一键准备 V5 资产
+
+```bat
+cmd /c ".venv\Scripts\python.exe _V5\scripts\runtime_full_pipeline.py --mode prepare --config _V5\configs\default.yaml"
 ```
-- 生成 supplemental 并重建 chat eval/followup：
-```bash
-python -m scripts.memory_processer.runtime.build_chat_supplemental_eval --config configs/chat_memory.yaml
-```
-- 合并 followup + chat：
-```bash
-python -m scripts.memory_indexer.build_merged_dataset --dataset followup_plus_chat
-```
-- 训练 reranker（wrapper）：
-```bash
-python -m scripts.memory_indexer.train_pairwise_reranker --config configs/default.yaml --dataset followup_plus_chat
-python -m scripts.memory_indexer.train_listwise_reranker --config configs/default.yaml --dataset followup_plus_chat
-```
-- 评测路由（run-dir、缓存、指标落盘）：
-```bash
-python -m scripts.memory_indexer.eval_router --config configs/default.yaml --dataset followup_plus_chat --use-learned-scorer
+
+该步骤会生成：
+
+- `data/V5/processed/{memory,query,cluster}.jsonl`
+- `data/V5/VectorCacheV5/users/*`
+- `data/V5/indexes/{dense_artifact.pkl,dense_matrix.npy,bm25.pkl}`
+- `data/V5/exports/chat_memory_bundle.jsonl`
+
+### 3) 冒烟检查
+
+```bat
+cmd /c ".venv\Scripts\python.exe _V5\scripts\doctor_data_chain.py --config _V5\configs\default.yaml"
+cmd /c ".venv\Scripts\python.exe _V5\scripts\smoke_coarse.py --config _V5\configs\default.yaml"
 ```
 
-## 运行口径（当前已固定）
-- `eval_router/train_reranker` 会将非 `coarse` 的 `candidate_mode` 自动纠正为 `coarse`。
-- query 中旧字段 `candidates/hard_negatives` 只做兼容提示，不进入候选池逻辑。
-- 建库时会按 `sentence_window` 对 memory 文本切块，运行态 `mem_id` 可能变为 `原mem_id#cN`。
-- 训练侧正例匹配支持 `expected_mem_id` 前缀（可命中 `mem_id#cN`）。
-- 缓存支持两种模式：
-  - 签名缓存（默认；query 签名含数据指纹与采样参数）
-  - 固定别名缓存（`--cache-alias`，如 `users` / `users_simple`）
+### 4) 离线评测
 
-## 文档索引
-- 总览与执行链路：`README/README.md`
-- 伪代码骨架：`README/伪代码框架.md`
-- 接口与数据契约：`README/接口设计.md`
-- 一键 runtime：`README/runtime_一键入口.md`
-- 最新变更记录：`README/开发日志.md`
+```bat
+cmd /c ".venv\Scripts\python.exe _V5\scripts\eval_offline.py --config _V5\configs\default.yaml --split test"
+```
+
+结果默认输出到 `_V5/runs/eval_offline/<timestamp>/`。
+
+## 服务运行
+
+### Retriever API
+
+```bat
+cmd /c ".venv\Scripts\python.exe _V5\scripts\serve_retriever.py --config _V5\configs\default.yaml --host 127.0.0.1 --port 8891"
+```
+
+### V5 Chat
+
+```bat
+cmd /c ".venv\Scripts\python.exe _V5\chat\app.py"
+```
+
+默认地址：`http://127.0.0.1:7861`
+
+## 可选增强能力
+
+- 联想图谱构建：
+```bat
+cmd /c ".venv\Scripts\python.exe _V5\scripts\build_association_graph.py --config _V5\configs\default.yaml"
+```
+- 抑制器训练与评估：
+```bat
+cmd /c ".venv\Scripts\python.exe _V5\scripts\train_suppressor.py --config _V5\configs\default.yaml"
+cmd /c ".venv\Scripts\python.exe _V5\scripts\eval_suppressor.py --artifact-dir data/V5/suppressor"
+```
+
+## 版本说明
+
+- 当前默认开发目标：V5
+- 历史目录 `_V3/`、`_V4/` 不作为当前主链运行入口
