@@ -192,3 +192,53 @@ data/VectorCache/eval_cache_normal.jsonl
 /data
 /_V4/runs
 /_V5/chat/data
+
+# Project-local no-upload rules
+
+# IDE/editor metadata
+.idea/
+.vscode/
+*.iml
+
+# OS temp files
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+*.bak
+
+# Secrets (keep examples)
+*.env
+*.env.*
+!*.env.example
+!**/*.env.example
+*.pem
+*.key
+*.p12
+
+# Large/binary artifacts
+*.pt
+*.bin
+*.ckpt
+*.onnx
+*.zip
+*.7z
+*.tar
+*.tar.gz
+
+# Runtime/export artifacts
+*.jsonl
+*.parquet
+*.tsv
+*.csv
+
+# Try to avoid uploading plain-text notes
+*.txt
+*.log
+*.out
+*.md
+!requirements.txt
+!**/requirements.txt
+!README.md
+!**/README.md
+!AGENTS.md
